@@ -1,0 +1,1 @@
+La cuadricula en la pantalla es de 30,5mm x 30,5mm.
