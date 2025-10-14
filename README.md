@@ -1,70 +1,70 @@
 # 3DMakerpro Seal Lite re-calibration
 
-> Herramientas para la **calibración estéreo de cámaras** y **reconstrucción 3D** con láser y UV, desarrolladas de forma independiente para el escáner **3DMakerPro SEAL Lite**.
+> Tools for **stereo camera calibration** and **3D reconstruction** with laser and UV, developed independently for the **3DMakerPro SEAL Lite** scanner.
 
-- 🔬 **Compatibilidad**: probado **exclusivamente con 3DMakerPro SEAL Lite**.  
-- 🙅‍♂️ Proyecto **no afiliado** con 3DMakerPro ni distribuidores.
-
----
-
-## Contexto / Prehistoria
-
-Tras un uso normal y cuidadoso del **3DMakerPro SEAL Lite**, el escáner empezó a producir **líneas horizontales** al intentar capturar.  
-Se intentaron, sin éxito:
-
-- Actualizaciones de software en **macOS** y **Windows**  
-- Soporte del **servicio técnico oficial**  
-- Contacto con el **administrador** del grupo de Facebook
-
-Frustrado por la falta de solución (aun con garantía), desarrollé esta **herramienta propia de calibración** basada en **OpenCV** para recuperar la funcionalidad y entender mejor el dispositivo.
+- 🔬 **Compatibility**: tested **exclusively with 3DMakerPro SEAL Lite**.
+- 🙅‍♂️ Project **not affiliated** with 3DMakerPro or distributors.
 
 ---
 
-## ⚠️ Aviso y Descargo de Responsabilidad
+## Context / Background
 
-Este software se ofrece **tal cual**, **sin garantía** de ningún tipo.
+After normal and careful use of the **3DMakerPro SEAL Lite**, the scanner began to produce **horizontal lines** when attempting to capture images.  
+The following attempts were made, without success:
 
-- Su mal uso puede **anular la garantía** del dispositivo.  
-- El autor **no se responsabiliza** de daños, pérdidas o fallos derivados del uso o mal uso.  
-- Cada usuario es **plenamente responsable** de su ejecución y consecuencias.
+- Software updates on **macOS** and **Windows**  
+- Support from **official technical support**
+- Contacting the **administrator** of the Facebook group
 
-**Úsalo bajo tu propia responsabilidad y conciencia.**
+Frustrated by the lack of a solution (even with a warranty), I developed this **proprietary calibration tool** based on **OpenCV** to restore functionality and better understand the device.
 
 ---
 
-## 🧩 Descripción técnica
+## ⚠️ Notice and Disclaimer
 
-Herramientas de calibración estéreo y reconstrucción 3D con soporte para patrones:
+This software is provided **as is**, **without warranty** of any kind.
 
-- **Tablero de ajedrez (chessboard)**
-- **Círculos asimétricos**
+- Misuse may **void the warranty** of the device.
+- The author **is not responsible** for any damage, loss, or failure resulting from use or misuse.
+- Each user is **fully responsible** for its execution and consequences.
+
+**Use it at your own risk and discretion.**
+
+---
+
+## Technical description
+
+Stereo calibration and 3D reconstruction tools with pattern support:
+
+- **Chessboard**
+- **Asymmetric circles**
 - **ChArUco (ArUco + Chessboard)**
 
-**Cámaras (SEAL Lite):**
-- Cámara **A**: **Laser** (frontal) → **índice 0**
-- Cámara **B**: **UV** (inclinada) → **índice 1**
+**Cameras (SEAL Lite):**
+- Camera **A**: **Laser** (front) → **index 0**
+- Camera **B**: **UV** (tilted) → **index 1**
 
 ---
 
-## Permisos de cámara en macOS desde terminal
+## Camera permissions in macOS from terminal
 
-Si ves:
+If you see:
 ```
 OpenCV: not authorized to capture video (status 0)
 ```
-Otorga permisos a **Terminal/Python** en  
-**Preferencias del Sistema → Seguridad y privacidad → Privacidad → Cámara**
+Grant permissions to **Terminal/Python** in  
+**System Preferences → Security & Privacy → Privacy → Camera**
 
-Forzar el prompt:
+Force the prompt:
 ```bash
 python3 -c "import cv2; cap=cv2.VideoCapture(0); print('Cam abierta:', cap.isOpened()); cap.release()"
 ```
 
-Si no en mi perfil hay un repositorio para una herramienta de poder ceder autorización a los programas para poder acceder a dispositivos del pc.
+If not, in my profile there is a repository for a tool that can grant authorization to programs to access PC devices.
 
 ---
 
-## 📦 Instalación
+## Installation
 
 ```bash
 uv venv
@@ -74,108 +74,108 @@ pip install -r requirements.txt
 
 ---
 
-## ▶️ Uso rápido
+## Quick Start
 
-### Calibración básica (tablero)
+### Basic calibration (dashboard)
 ```bash
 python stereo_calibration.py --left 0 --right 1 --rows 6 --cols 9 --square-size 25.0
 ```
 
-### Círculos asimétricos + ajuste UV
+### Asymmetric circles + UV adjustment
 ```bash
 python stereo_calibration.py --pattern-type circles --rows 11 --cols 4 --square-size 6.70 --uv-brightness 0.6 --uv-contrast 0.5
 ```
 
-### ChArUco (con fallback automático)
+### ChArUco (with automatic fallback)
 ```bash
 python stereo_calibration.py --pattern-type charuco --rows 7 --cols 5 --square-size 20.0
 ```
 
 ---
 
-## Sesión interactiva (detección, dibujo y autocaptura)
+## Interactive session (detection, drawing and auto-capture)
 
-Durante la calibración:
+During calibration:
 
-1. Se **combina** el stream: **Izq (A/Laser)** | **Der (B/UV)** en una ventana 2560×720.  
-2. Se **detecta** el patrón elegido en cada lado.  
-3. Se **dibujan** esquinas/puntos (con **offset** horizontal aplicado en la imagen derecha).  
-4. Se **autocaptura** un par cuando **ambos** lados detectan patrón (con delay ≈ **1.0 s** anti-rebote).  
-5. Se **guardan** imágenes temporales y se **acumulan** puntos 2D/3D para calibrar.
+1. The stream is **combined**: **Left (A/Laser)** | **Right (B/UV)** in a 2560×720 window.  
+2. The chosen pattern is **detected** on each side.  
+3. Corners/points are **drawn** (with horizontal **offset** applied to the right image).  
+4. A pair is **auto-captured** when **both** sides detect a pattern (with anti-bounce delay ≈ **1.0 s**).  
+5. Temporary images are **saved** and 2D/3D points are **accumulated** for calibration.
 
-**HUD on-screen:**
-- `Pares capturados: X/N`
-- `Derecha (B-UV) FPS | Izquierda (A-Laser) FPS`
-- `Patrón Derecha/Izquierda: SI/NO`
-- `Tipo: chessboard | circles | charuco`
+**On-screen HUD:**
+- `Pairs captured: X/N`
+- `Right (B-UV) FPS | Left (A-Laser) FPS`
+- `Right/Left pattern: YES/NO`
+- `Type: chessboard | circles | charuco`
 
-**Atajos:**
-- `q` → salir  
-- `+ / -` → brillo **UV**  
-- `c / x` → contraste **UV**
+**Shortcuts:**
+- `q` → exit
+- `+ / -` → **UV** brightness
+- `c / x` → **UV** contrast
 
 ---
 
-## Plantilla de calibración (descarga y atributos)
+## Calibration template (download and attributes)
 
 
 
-**Generar resultados** y archivo “SEAL compatible”:
+**Generate results** and “SEAL compatible” file:
 ```bash
 python stereo_calibration.py   --left 0 --right 1   --rows 6 --cols 9 --square-size 25.0   --images 15   --output stereo_calibration.txt   --template calib_SEALLITE_template.txt   --dev-id JMS1006207
 ```
 
-**Atributos** que el script inserta/actualiza al generar el archivo final (a partir de tu calibración):
-- **Intrínsecos** (cámara **A/Laser**): `fx, fy, cx, cy`  
-- **Distorsión** (5 coef.): `k1, k2, p1, p2, k3`  
-- **Resolución forzada**: `1280×720`  
-- **Metadatos**: `CalibrateDate`, `Type: Sychev-calibration`, `SoftVersion: 3.0.0.1116`, `DevID` (si se pasa `--dev-id`)
+**Attributes** that the script inserts/updates when generating the final file (based on your calibration):
+- **Intrinsic** (**A/Laser** camera): `fx, fy, cx, cy`
+- **Distortion** (5 coef.): `k1, k2, p1, p2, k3`
+- **Forced resolution**: `1280×720`  
+- **Metadata**: `CalibrateDate`, `Type: Sychev-calibration`, `SoftVersion: 3.0.0.1116`, `DevID` (if `--dev-id` is passed)
 
-> Puedes ofrecer además un **archivo base** (no plantilla) con valores razonables para SEAL Lite, para que el usuario lo ajuste tras su propia calibración.
-
----
-
-## Detalles de implementación (resumen del código)
-
-- **Captura y latencia baja**: `CameraStream` usa `CAP_PROP_BUFFERSIZE=1`, cola `maxsize=3`, cálculo de FPS real y backends en cascada (`CAP_ANY → CAP_AVFOUNDATION → CAP_V4L2`).  
-- **Detección con caché**: `PatternDetector` limita detecciones a intervalos de 0.1s para no sobrecargar CPU.  
-- **Patrones**:
-  - *Chessboard*: `findChessboardCorners` + `cornerSubPix`  
-  - *Circles asimétricos*: `SimpleBlobDetector` + `findCirclesGrid(ASYMMETRIC_GRID)` con fallback directo  
-  - *ChArUco*: `CharucoDetector` (DICT_6X6_250); en captura, intenta `matchImagePoints` para correspondencias; si falla, fallback estándar  
-- **Autocaptura**: cuando ambos lados detectan patrón, guarda `left_XX.jpg` / `right_XX.jpg` (tmp) y acumula `objpoints/imgpoints`.  
-- **Calibración**:  
-  - Individual A/B: `cv2.calibrateCamera`  
-  - Estéreo: `cv2.stereoCalibrate` (criterio `EPS|MAX_ITER`)  
-- **Salida**:  
-  - Archivo **técnico** (`--output`) con `K_right`, `dist_right`, `K_left`, `dist_left`, `R`, `T`  
-  - Archivo **SEAL compatible** vía `seal_calib_writer.write_new_calibration(...)` y actualización de metadatos
+> You can also provide a **base file** (not a template) with reasonable values for SEAL Lite, so that the user can adjust it after their own calibration.
 
 ---
 
-## 🔧 Diagnóstico rápido
+## Implementation details (code summary)
 
-Probar cámaras individualmente:
+- **Capture and low latency**: `CameraStream` uses `CAP_PROP_BUFFERSIZE=1`, queue `maxsize=3`, real FPS calculation, and cascading backends (`CAP_ANY → CAP_AVFOUNDATION → CAP_V4L2`).  
+- **Cached detection**: `PatternDetector` limits detections to 0.1s intervals to avoid CPU overload.
+- **Patterns**:
+- *Chessboard*: `findChessboardCorners` + `cornerSubPix`  
+  - *Asymmetric circles*: `SimpleBlobDetector` + `findCirclesGrid(ASYMMETRIC_GRID)` with direct fallback
+- *ChArUco*: `CharucoDetector` (DICT_6X6_250); during capture, attempts `matchImagePoints` for matches; if it fails, standard fallback  
+- **Auto capture**: when both sides detect a pattern, save `left_XX.jpg` / `right_XX.jpg` (tmp) and accumulate `objpoints/imgpoints`.
+- **Calibration**:
+- Individual A/B: `cv2.calibrateCamera`  
+  - Stereo: `cv2.stereoCalibrate` (criterion `EPS|MAX_ITER`)
+- **Output**:
+- **Technical** file (`--output`) with `K_right`, `dist_right`, `K_left`, `dist_left`, `R`, `T`  
+  - **SEAL compatible** file via `seal_calib_writer.write_new_calibration(...)` and metadata update
+
+---
+
+## Quick diagnosis
+
+Test cameras individually:
 ```bash
 python -c "import stereo_calibration as s; s.test_single_camera(0, 'Laser (A)', 10)"
 python -c "import stereo_calibration as s; s.test_single_camera(1, 'UV (B)', 10)"
 ```
-- Muestra **backend**, **FOURCC**, **FPS teórico/real** y confirma permisos del SO.
+- Shows **backend**, **FOURCC**, **theoretical/actual FPS** and confirms OS permissions.
 
 ---
 
-## 🧷 Notas / Buenas prácticas
+## Notes / Best practices
 
-- Inicia primero **A (Laser)**, espera ~2 s y luego **B (UV)**.  
-- Ocupa gran parte del encuadre con el patrón y varía ángulos/distancias entre capturas.  
-- Para **circles**, evita saturación y cuida el contraste (importante para el blob detector).  
-- Si **ChArUco** no detecta, hay **fallback** a *chessboard* (se avisa por logs).  
-- La resolución de trabajo se **fuerza a 1280×720** para consistencia con el software del dispositivo.
+- Start **A (Laser)** first, wait ~2 s, and then **B (UV)**.
+- Fill most of the frame with the pattern and vary angles/distances between captures.
+- For **circles**, avoid saturation and pay attention to contrast (important for the blob detector).  
+- If **ChArUco** does not detect, there is a **fallback** to *chessboard* (notified by logs).  
+- The working resolution is **forced to 1280×720** for consistency with the device software.
 
 ---
 
 
-## **Tipos de brillo/contraste UV (opcional):** si tu backend soporta valores flotantes, en `argparse` usa `float` en lugar de `int`:
+## **Types of UV brightness/contrast (optional):** if your backend supports floating point values, use `float` instead of `int` in `argparse`:
    ```python
    parser.add_argument("--uv-brightness", type=float, default=-1.0, ...)
    parser.add_argument("--uv-contrast",  type=float, default=-1.0, ...)
@@ -183,29 +183,29 @@ python -c "import stereo_calibration as s; s.test_single_camera(1, 'UV (B)', 10)
 
 ---
 
-## Cámaras USB Detectadas
+## Detected USB Cameras
 
 ```text
 KYT Camera A:
 
   N.º de modelo:	UVC Camera VendorID_3141 ProductID_25450
-  Identificador único:	0x145110000c45636a
+  Unique identifier:	0x145110000c45636a
 
 KYT Camera B:
 
   N.º de modelo:	UVC Camera VendorID_3141 ProductID_25451
-  Identificador único:	0x145120000c45636b
+  Unique identifier:	0x145120000c45636b
 ```
 
-## Configuración de cámaras
+## Cmera configuration
 
-- Cámara láser (frontal): Índice 0
-- Cámara UV (inclinada): Índice 1
+- Laser camera (front): Index 0
+- UV camera (inclined): Index 1
 
-## Scripts principales
+## Main scripts
 
 ### stereo_calibration.py
-Calibración estéreo con dos cámaras:
+Stereo calibration with two cameras:
 
 ```bash
 # Calibración básica
@@ -226,25 +226,22 @@ python stereo_calibration.py --pattern-type charuco
 python stereo_calibration.py --uv-brightness 0.5 --uv-contrast 0.5
 ```
 
-### Métodos de calibración
+### Calibration methods
 
-1. **Tablero de ajedrez (chessboard)**:
-   - Patrón tradicional de calibración
-   - Detección robusta en diversas condiciones de iluminación
-   - Requiere patrón plano completamente visible
-   - Teclas: +/- para ajustar brillo/contraste de cámara UV
+1. **Chessboard**:
+   - Traditional calibration pattern
+   - Robust detection in various lighting conditions
+   - Requires a completely visible flat pattern
 
-2. **Círculos asimétricos (circles)**:
-   - Patrón de círculos dispuestos en cuadrícula asimétrica
-   - Menos sensible a las distorsiones de lente
-   - Permite detección parcial del patrón
-   - Teclas: +/- para ajustar brillo/contraste de cámara UV
+2. **Asymmetric circles:**
+   - Pattern of circles arranged in an asymmetric grid
+   - Less sensitive to lens distortions
+   - Allows partial detection of the pattern
 
 3. **ChArUco (charuco)**:
-   - Combinación de marcadores ArUco y tablero de ajedrez
-   - Mayor precisión en la detección de esquinas
-   - Permite detección con oclusiones parciales
-   - Teclas: +/- para ajustar brillo/contraste de cámara UV
+   - Combination of ArUco markers and chessboard
+   - Greater precision in corner detection
+   - Allows detection with partial occlusions
 
 ---
 
