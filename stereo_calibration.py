@@ -407,7 +407,8 @@ def combine_frames(frame_left, frame_right):
 def calibrate_stereo_cameras(camera_left_index, camera_right_index, 
                            checkerboard_rows, checkerboard_cols, 
                            square_size_mm, num_images=15, pattern_type="chessboard",
-                           uv_brightness=-1, uv_contrast=-1):
+                           uv_brightness=-1, uv_contrast=-1, resolution=None, target_fps=None,
+                           aruco_dict_name="DICT_6X6_250"):
     """
     Calibra cámaras estéreo usando dos cámaras físicas diferentes.
     """
@@ -573,8 +574,95 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
         charuco_detector = None
         if pattern_type == "charuco":
             try:
-                # Crear diccionario de marcadores ArUco (por defecto)
-                aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_250)
+                # Crear diccionario de marcadores ArUco según el especificado
+                ARUCO_DICT = {
+                    "DICT_4X4_50": cv2.aruco.DICT_4X4_50,
+                    "DICT_4X4_100": cv2.aruco.DICT_4X4_100,
+                    "DICT_4X4_250": cv2.aruco.DICT_4X4_250,
+                    "DICT_4X4_1000": cv2.aruco.DICT_4X4_1000,
+                    "DICT_5X5_50": cv2.aruco.DICT_5X5_50,
+                    "DICT_5X5_100": cv2.aruco.DICT_5X5_100,
+                    "DICT_5X5_250": cv2.aruco.DICT_5X5_250,
+                    "DICT_5X5_1000": cv2.aruco.DICT_5X5_1000,
+                    "DICT_6X6_50": cv2.aruco.DICT_6X6_50,
+                    "DICT_6X6_100": cv2.aruco.DICT_6X6_100,
+                    "DICT_6X6_250": cv2.aruco.DICT_6X6_250,
+                    "DICT_6X6_1000": cv2.aruco.DICT_6X6_1000,
+                    "DICT_7X7_50": cv2.aruco.DICT_7X7_50,
+                    "DICT_7X7_100": cv2.aruco.DICT_7X7_100,
+                    "DICT_7X7_250": cv2.aruco.DICT_7X7_250,
+                    "DICT_7X7_1000": cv2.aruco.DICT_7X7_1000,
+                    "DICT_ARUCO_ORIGINAL": cv2.aruco.DICT_ARUCO_ORIGINAL,
+                    "DICT_APRILTAG_16h5": cv2.aruco.DICT_APRILTAG_16h5,
+                    "DICT_APRILTAG_25h9": cv2.aruco.DICT_APRILTAG_25h9,
+                    "DICT_APRILTAG_36h10": cv2.aruco.DICT_APRILTAG_36h10,
+                    "DICT_APRILTAG_36h11": cv2.aruco.DICT_APRILTAG_36h11
+                }
+                
+                # Función para detectar automáticamente el diccionario ArUco
+                def detect_aruco_dict(gray_frame):
+                    """Detecta automáticamente el diccionario ArUco probando varios"""
+                    if aruco_dict_name.lower() != "auto":
+                        if aruco_dict_name not in ARUCO_DICT:
+                            raise ValueError(f"Diccionario ArUco no válido: {aruco_dict_name}")
+                        return cv2.aruco.getPredefinedDictionary(ARUCO_DICT[aruco_dict_name])
+                    
+                    # Lista de diccionarios a probar (ordenados por probabilidad de uso)
+                    test_dicts = [
+                        "DICT_6X6_250", "DICT_5X5_250", "DICT_4X4_250",
+                        "DICT_6X6_100", "DICT_5X5_100", "DICT_4X4_100",
+                        "DICT_6X6_50", "DICT_5X5_50", "DICT_4X4_50",
+                        "DICT_ARUCO_ORIGINAL"
+                    ]
+                    
+                    print("[INFO] Detectando automáticamente diccionario ArUco...")
+                    for dict_name in test_dicts:
+                        try:
+                            aruco_dict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT[dict_name])
+                            # Crear un detector temporal para probar
+                            temp_board = cv2.aruco.CharucoBoard(
+                                size=(checkerboard_cols, checkerboard_rows),
+                                squareLength=square_size_mm,
+                                markerLength=square_size_mm * 0.7,
+                                dictionary=aruco_dict
+                            )
+                            temp_params = cv2.aruco.CharucoParameters()
+                            temp_params.minMarkers = 2
+                            temp_detector = cv2.aruco.CharucoDetector(temp_board, temp_params)
+                            
+                            # Probar detección
+                            charuco_corners, charuco_ids, marker_corners, marker_ids = temp_detector.detectBoard(gray_frame)
+                            if charuco_corners is not None and len(charuco_corners) > 0:
+                                print(f"[SUCCESS] Diccionario ArUco detectado automáticamente: {dict_name}")
+                                return aruco_dict
+                        except Exception as e:
+                            continue
+                    
+                    # Si no se detecta ninguno, usar el por defecto
+                    print("[WARNING] No se pudo detectar automáticamente el diccionario ArUco, usando DICT_6X6_250")
+                    return cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_250)
+                
+                # Obtener un frame de muestra para la detección automática
+                sample_frame = None
+                sample_timeout = 5.0  # segundos
+                sample_start = time.time()
+                
+                # Esperar a obtener un frame válido para la detección
+                while sample_frame is None and (time.time() - sample_start) < sample_timeout:
+                    left_ret, left_frame = left_stream.get_frame()
+                    if left_ret and left_frame is not None and left_frame.size > 0:
+                        sample_frame = left_frame.copy()
+                        break
+                    time.sleep(0.1)
+                
+                if sample_frame is None:
+                    print("[WARNING] No se pudo obtener frame de muestra para detección automática, usando diccionario por defecto")
+                    aruco_dict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT.get(aruco_dict_name, cv2.aruco.DICT_6X6_250))
+                else:
+                    # Convertir a escala de grises para la detección
+                    gray_sample = cv2.cvtColor(sample_frame, cv2.COLOR_BGR2GRAY)
+                    # Detectar diccionario ArUco
+                    aruco_dict = detect_aruco_dict(gray_sample)
                 
                 # Crear el tablero ChArUco con parámetros específicos
                 charuco_board = cv2.aruco.CharucoBoard(
@@ -1062,6 +1150,16 @@ def main():
                        help="Tipo de patrón de calibración: chessboard, circles, charuco")
     parser.add_argument("--uv-brightness", type=int, default=-1, help="Brillo para la cámara UV (-1 para no cambiar)")
     parser.add_argument("--uv-contrast", type=int, default=-1, help="Contraste para la cámara UV (-1 para no cambiar)")
+    parser.add_argument("--fps", type=float, default=None, help="FPS objetivo para las cámaras (por defecto usa FPS nativo)")
+    parser.add_argument("--aruco-dict", type=str, default="DICT_6X6_250", 
+                       choices=["auto", "DICT_4X4_50", "DICT_4X4_100", "DICT_4X4_250", "DICT_4X4_1000",
+                               "DICT_5X5_50", "DICT_5X5_100", "DICT_5X5_250", "DICT_5X5_1000",
+                               "DICT_6X6_50", "DICT_6X6_100", "DICT_6X6_250", "DICT_6X6_1000",
+                               "DICT_7X7_50", "DICT_7X7_100", "DICT_7X7_250", "DICT_7X7_1000",
+                               "DICT_ARUCO_ORIGINAL", "DICT_APRILTAG_16h5", "DICT_APRILTAG_25h9",
+                               "DICT_APRILTAG_36h10", "DICT_APRILTAG_36h11"],
+                       help="Diccionario ArUco para detección ChArUco (usar 'auto' para detección automática)")
+    # Se elimina el argumento de resolución ya que se usará la resolución máxima de la cámara
     
     args = parser.parse_args()
     
@@ -1078,11 +1176,15 @@ def main():
         print(f"  Cámara A (laser) = izquierda = índice {args.left}")
         print(f"  Cámara B (UV) = derecha = índice {args.right}")
         print(f"  Tipo de patrón: {args.pattern_type}")
+        print(f"  FPS objetivo: {args.fps if args.fps else 'Usar FPS nativo'}")
+        if args.pattern_type == "charuco":
+            print(f"  Diccionario ArUco: {args.aruco_dict}")
         print(f"[INFO] Si ves el error 'not authorized to capture video', otorga permisos de cámara a Terminal/Python")
         
         img_size, K_right, dist_right, K_left, dist_left, R, T = calibrate_stereo_cameras(
             args.left, args.right, args.rows, args.cols, args.square_size, args.images, 
-            pattern_type=args.pattern_type, uv_brightness=args.uv_brightness, uv_contrast=args.uv_contrast)
+            pattern_type=args.pattern_type, uv_brightness=args.uv_brightness, uv_contrast=args.uv_contrast,
+            resolution=None, target_fps=args.fps, aruco_dict_name=args.aruco_dict)  # Usar resolución real de las cámaras y FPS objetivo
         
         # Guardar resultados en formato técnico
         save_calibration_results(img_size, K_right, dist_right, K_left, dist_left, R, T, args.output)

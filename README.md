@@ -221,7 +221,7 @@ python stereo_calibration.py --output stereo_calibration.txt --template calibJMS
 
 # Usar patrón ChArUco
 python stereo_calibration.py --pattern-type charuco
-python stereo_calibration.py --left 1 --right 0 --images 15 --output stereo_calibration.txt --template calibJMS1006207.txt --dev-id JMS1006207 --pattern-type charuco  --rows 5 --cols 7
+python stereo_calibration.py --left 1 --right 0 --images 15 --output stereo_calibration.txt --template calibJMS1006207.txt --dev-id JMS1006207 --pattern-type charuco  --rows 7 --cols 5 --square-size 8.57
 
 # Ajustar brillo de cámara UV
 python stereo_calibration.py --uv-brightness 0.5 --uv-contrast 0.5
