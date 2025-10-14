@@ -408,7 +408,7 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
                            checkerboard_rows, checkerboard_cols, 
                            square_size_mm, num_images=15, pattern_type="chessboard",
                            uv_brightness=-1, uv_contrast=-1, resolution=None, target_fps=None,
-                           aruco_dict_name="DICT_6X6_250"):
+                           aruco_dict_name="DICT_6X6_250", auto_capture=True):
     """
     Calibra cámaras estéreo usando dos cámaras físicas diferentes.
     """
@@ -605,8 +605,10 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
                     if aruco_dict_name.lower() != "auto":
                         if aruco_dict_name not in ARUCO_DICT:
                             raise ValueError(f"Diccionario ArUco no válido: {aruco_dict_name}")
-                        return cv2.aruco.getPredefinedDictionary(ARUCO_DICT[aruco_dict_name])
-                    
+                        # Usar la API moderna de ArUco
+                        aruco_dict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT[aruco_dict_name])
+                        return aruco_dict
+                
                     # Lista de diccionarios a probar (ordenados por probabilidad de uso)
                     test_dicts = [
                         "DICT_6X6_250", "DICT_5X5_250", "DICT_4X4_250",
@@ -618,17 +620,22 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
                     print("[INFO] Detectando automáticamente diccionario ArUco...")
                     for dict_name in test_dicts:
                         try:
+                            # Usar la API moderna de ArUco
                             aruco_dict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT[dict_name])
                             # Crear un detector temporal para probar
                             temp_board = cv2.aruco.CharucoBoard(
                                 size=(checkerboard_cols, checkerboard_rows),
                                 squareLength=square_size_mm,
-                                markerLength=square_size_mm * 0.7,
-                                dictionary=aruco_dict
+                                markerLength=square_size_mm * 0.7
                             )
+                            # Asignar el diccionario al tablero
+                            temp_board.setDictionary(aruco_dict)
+                            
                             temp_params = cv2.aruco.CharucoParameters()
                             temp_params.minMarkers = 2
-                            temp_detector = cv2.aruco.CharucoDetector(temp_board, temp_params)
+                            # Crear detector usando la API moderna
+                            temp_detector = cv2.aruco.CharucoDetector(temp_board)
+                            temp_detector.setDetectorParameters(temp_params)
                             
                             # Probar detección
                             charuco_corners, charuco_ids, marker_corners, marker_ids = temp_detector.detectBoard(gray_frame)
@@ -664,20 +671,22 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
                     # Detectar diccionario ArUco
                     aruco_dict = detect_aruco_dict(gray_sample)
                 
-                # Crear el tablero ChArUco con parámetros específicos
+                # Crear el tablero ChArUco con parámetros específicos usando la API moderna
                 charuco_board = cv2.aruco.CharucoBoard(
                     size=(checkerboard_cols, checkerboard_rows),
                     squareLength=square_size_mm,  # En milímetros directamente
-                    markerLength=square_size_mm * 0.7,  # 70% del tamaño del cuadrado
-                    dictionary=aruco_dict
+                    markerLength=square_size_mm * 0.7  # 70% del tamaño del cuadrado
                 )
+                # Asignar el diccionario al tablero
+                charuco_board.setDictionary(aruco_dict)
                 
                 # Crear parámetros de detección ChArUco
                 charuco_params = cv2.aruco.CharucoParameters()
                 charuco_params.minMarkers = 2  # Mínimo número de marcadores para interpolación
                 
-                # Crear detector ChArUco
-                charuco_detector = cv2.aruco.CharucoDetector(charuco_board, charuco_params)
+                # Crear detector ChArUco usando la API moderna
+                charuco_detector = cv2.aruco.CharucoDetector(charuco_board)
+                charuco_detector.setDetectorParameters(charuco_params)
                 
                 print(f"[INFO] Detector ChArUco inicializado correctamente con tablero {checkerboard_cols}x{checkerboard_rows}")
                 print(f"[INFO] Tamaño de cuadrado: {square_size_mm}mm, Tamaño de marcador: {square_size_mm * 0.7}mm")
@@ -690,7 +699,10 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
         
         captured_count = 0
         print(f"[INFO] Capturando {num_images} pares de imágenes...")
-        print("[INFO] Captura automática cuando se detecten ambas cuadrículas")
+        if auto_capture:
+            print("[INFO] Captura automática cuando se detecten ambas cuadrículas")
+        else:
+            print("[INFO] Presiona BARRA ESPACIADORA para capturar pares de imágenes")
         print(f"[INFO] Tipo de patrón: {pattern_type}")
         
         # Estado de detección
@@ -790,7 +802,7 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
                             right_found = False
                             right_corners = None
                 elif pattern_type == "charuco" and charuco_detector is not None:
-                    # Usar el detector ChArUco correcto según las especificaciones
+                    # Usar el detector ChArUco correcto según las especificaciones (API moderna)
                     try:
                         charuco_corners, charuco_ids, marker_corners, marker_ids = charuco_detector.detectBoard(gray_right)
                         right_found = charuco_corners is not None and len(charuco_corners) > 0
@@ -957,11 +969,52 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
             except Exception as e:
                 print(f"[ERROR] Error al mostrar ventana: {e}")
             
-            # Captura automática cuando se detectan ambas cuadrículas
+            # Captura automática o manual cuando se detectan ambas cuadrículas
             current_time = time.time()
-            if right_found and left_found and (current_time - last_capture_time) > capture_delay:
-                print(f"[INFO] Capturando par {captured_count + 1} automáticamente...")
-                
+            capture_triggered = False
+            
+            if auto_capture:
+                # Captura automática
+                if right_found and left_found and (current_time - last_capture_time) > capture_delay:
+                    print(f"[INFO] Capturando par {captured_count + 1} automáticamente...")
+                    capture_triggered = True
+            else:
+                # Captura manual con barra espaciadora
+                try:
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord(' '):  # Barra espaciadora
+                        if right_found and left_found:
+                            print(f"[INFO] Capturando par {captured_count + 1} manualmente...")
+                            capture_triggered = True
+                        else:
+                            print("[INFO] No se detectaron ambas cuadrículas, no se puede capturar")
+                    elif key == ord('q'):
+                        print("[INFO] Salida solicitada")
+                        break
+                    elif key == ord('+') and right_stream.cap and right_stream.cap.isOpened():
+                        # Aumentar brillo de la cámara UV
+                        current_brightness = right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)
+                        right_stream.cap.set(cv2.CAP_PROP_BRIGHTNESS, min(1.0, current_brightness + 0.1))
+                        print(f"[INFO] Brillo UV aumentado a: {right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)}")
+                    elif key == ord('-') and right_stream.cap and right_stream.cap.isOpened():
+                        # Disminuir brillo de la cámara UV
+                        current_brightness = right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)
+                        right_stream.cap.set(cv2.CAP_PROP_BRIGHTNESS, max(-1.0, current_brightness - 0.1))
+                        print(f"[INFO] Brillo UV disminuido a: {right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)}")
+                    elif key == ord('c') and right_stream.cap and right_stream.cap.isOpened():
+                        # Aumentar contraste de la cámara UV
+                        current_contrast = right_stream.cap.get(cv2.CAP_PROP_CONTRAST)
+                        right_stream.cap.set(cv2.CAP_PROP_CONTRAST, min(1.0, current_contrast + 0.1))
+                        print(f"[INFO] Contraste UV aumentado a: {right_stream.cap.get(cv2.CAP_PROP_CONTRAST)}")
+                    elif key == ord('x') and right_stream.cap and right_stream.cap.isOpened():
+                        # Disminuir contraste de la cámara UV
+                        current_contrast = right_stream.cap.get(cv2.CAP_PROP_CONTRAST)
+                        right_stream.cap.set(cv2.CAP_PROP_CONTRAST, max(-1.0, current_contrast - 0.1))
+                        print(f"[INFO] Contraste UV disminuido a: {right_stream.cap.get(cv2.CAP_PROP_CONTRAST)}")
+                except Exception as e:
+                    print(f"[ERROR] Error al procesar tecla: {e}")
+        
+            if capture_triggered:
                 try:
                     # Para ChArUco, usar matchImagePoints para obtener puntos correspondientes
                     if pattern_type == "charuco" and charuco_board is not None:
@@ -1041,34 +1094,35 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
                 except Exception as e:
                     print(f"[ERROR] Error al capturar: {str(e)}")
             
-            # Procesar teclas para salir o ajustar configuración
-            try:
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('q'):
-                    print("[INFO] Salida solicitada")
-                    break
-                elif key == ord('+') and right_stream.cap and right_stream.cap.isOpened():
-                    # Aumentar brillo de la cámara UV
-                    current_brightness = right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)
-                    right_stream.cap.set(cv2.CAP_PROP_BRIGHTNESS, min(1.0, current_brightness + 0.1))
-                    print(f"[INFO] Brillo UV aumentado a: {right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)}")
-                elif key == ord('-') and right_stream.cap and right_stream.cap.isOpened():
-                    # Disminuir brillo de la cámara UV
-                    current_brightness = right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)
-                    right_stream.cap.set(cv2.CAP_PROP_BRIGHTNESS, max(-1.0, current_brightness - 0.1))
-                    print(f"[INFO] Brillo UV disminuido a: {right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)}")
-                elif key == ord('c') and right_stream.cap and right_stream.cap.isOpened():
-                    # Aumentar contraste de la cámara UV
-                    current_contrast = right_stream.cap.get(cv2.CAP_PROP_CONTRAST)
-                    right_stream.cap.set(cv2.CAP_PROP_CONTRAST, min(1.0, current_contrast + 0.1))
-                    print(f"[INFO] Contraste UV aumentado a: {right_stream.cap.get(cv2.CAP_PROP_CONTRAST)}")
-                elif key == ord('x') and right_stream.cap and right_stream.cap.isOpened():
-                    # Disminuir contraste de la cámara UV
-                    current_contrast = right_stream.cap.get(cv2.CAP_PROP_CONTRAST)
-                    right_stream.cap.set(cv2.CAP_PROP_CONTRAST, max(-1.0, current_contrast - 0.1))
-                    print(f"[INFO] Contraste UV disminuido a: {right_stream.cap.get(cv2.CAP_PROP_CONTRAST)}")
-            except Exception as e:
-                print(f"[ERROR] Error al procesar tecla: {e}")
+            # Procesar teclas para salir o ajustar configuración (solo en modo manual)
+            if not auto_capture:
+                try:
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord('q'):
+                        print("[INFO] Salida solicitada")
+                        break
+                    elif key == ord('+') and right_stream.cap and right_stream.cap.isOpened():
+                        # Aumentar brillo de la cámara UV
+                        current_brightness = right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)
+                        right_stream.cap.set(cv2.CAP_PROP_BRIGHTNESS, min(1.0, current_brightness + 0.1))
+                        print(f"[INFO] Brillo UV aumentado a: {right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)}")
+                    elif key == ord('-') and right_stream.cap and right_stream.cap.isOpened():
+                        # Disminuir brillo de la cámara UV
+                        current_brightness = right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)
+                        right_stream.cap.set(cv2.CAP_PROP_BRIGHTNESS, max(-1.0, current_brightness - 0.1))
+                        print(f"[INFO] Brillo UV disminuido a: {right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)}")
+                    elif key == ord('c') and right_stream.cap and right_stream.cap.isOpened():
+                        # Aumentar contraste de la cámara UV
+                        current_contrast = right_stream.cap.get(cv2.CAP_PROP_CONTRAST)
+                        right_stream.cap.set(cv2.CAP_PROP_CONTRAST, min(1.0, current_contrast + 0.1))
+                        print(f"[INFO] Contraste UV aumentado a: {right_stream.cap.get(cv2.CAP_PROP_CONTRAST)}")
+                    elif key == ord('x') and right_stream.cap and right_stream.cap.isOpened():
+                        # Disminuir contraste de la cámara UV
+                        current_contrast = right_stream.cap.get(cv2.CAP_PROP_CONTRAST)
+                        right_stream.cap.set(cv2.CAP_PROP_CONTRAST, max(-1.0, current_contrast - 0.1))
+                        print(f"[INFO] Contraste UV disminuido a: {right_stream.cap.get(cv2.CAP_PROP_CONTRAST)}")
+                except Exception as e:
+                    print(f"[ERROR] Error al procesar tecla: {e}")
                 
         # Detener streams
         right_stream.stop()
@@ -1159,6 +1213,8 @@ def main():
                                "DICT_ARUCO_ORIGINAL", "DICT_APRILTAG_16h5", "DICT_APRILTAG_25h9",
                                "DICT_APRILTAG_36h10", "DICT_APRILTAG_36h11"],
                        help="Diccionario ArUco para detección ChArUco (usar 'auto' para detección automática)")
+    parser.add_argument("--no-auto-capture", action="store_true", 
+                       help="Deshabilitar captura automática y usar barra espaciadora para capturar")
     # Se elimina el argumento de resolución ya que se usará la resolución máxima de la cámara
     
     args = parser.parse_args()
@@ -1179,12 +1235,14 @@ def main():
         print(f"  FPS objetivo: {args.fps if args.fps else 'Usar FPS nativo'}")
         if args.pattern_type == "charuco":
             print(f"  Diccionario ArUco: {args.aruco_dict}")
+        print(f"  Captura automática: {'No' if args.no_auto_capture else 'Sí'}")
         print(f"[INFO] Si ves el error 'not authorized to capture video', otorga permisos de cámara a Terminal/Python")
         
         img_size, K_right, dist_right, K_left, dist_left, R, T = calibrate_stereo_cameras(
             args.left, args.right, args.rows, args.cols, args.square_size, args.images, 
             pattern_type=args.pattern_type, uv_brightness=args.uv_brightness, uv_contrast=args.uv_contrast,
-            resolution=None, target_fps=args.fps, aruco_dict_name=args.aruco_dict)  # Usar resolución real de las cámaras y FPS objetivo
+            resolution=None, target_fps=args.fps, aruco_dict_name=args.aruco_dict,
+            auto_capture=not args.no_auto_capture)  # Usar captura automática o manual
         
         # Guardar resultados en formato técnico
         save_calibration_results(img_size, K_right, dist_right, K_left, dist_left, R, T, args.output)

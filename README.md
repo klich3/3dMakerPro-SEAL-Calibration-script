@@ -214,6 +214,7 @@ python stereo_calibration.py
 # Calibración con parámetros específicos
 python stereo_calibration.py --left 0 --right 1 --rows 6 --cols 9 --square-size 25.0
 python stereo_calibration.py --left 1 --right 0 --rows 6 --cols 9 --square-size 6.60 --images 15 --output stereo_calibration.txt --template calibJMS1006207.txt --dev-id JMS1006207
+python stereo_calibration.py --left 1 --right 0 --rows 6 --cols 9 --square-size 3 --images 15 --output stereo_calibration.txt --template calibJMS1006207.txt --dev-id JMS1006207 --no-auto-capture
 
 # Usar patrón de círculos
 python stereo_calibration.py --pattern-type circles
@@ -243,6 +244,84 @@ python stereo_calibration.py --uv-brightness 0.5 --uv-contrast 0.5
    - Combination of ArUco markers and chessboard
    - Greater precision in corner detection
    - Allows detection with partial occlusions
+
+---
+
+# SEAL_CALIB_Builder
+
+Herramienta de calibración estéreo para cámaras duales.
+
+## Características
+
+- Calibración estéreo de dos cámaras simultáneamente
+- Detección de patrones: tablero de ajedrez, círculos asimétricos y ChArUco
+- Captura automática o manual de imágenes
+- Soporte para diferentes diccionarios ArUco
+- Configuración de brillo y contraste para la cámara UV
+- Control de FPS
+
+## Requisitos
+
+- Python 3.7+
+- OpenCV 4.5+
+- NumPy
+
+## Instalación
+
+```bash
+pip install -r requirement.txt
+```
+
+## Uso
+
+### Calibración automática (por defecto)
+
+```bash
+python stereo_calibration.py
+```
+
+### Calibración manual con barra espaciadora
+
+```bash
+python stereo_calibration.py --no-auto-capture
+```
+
+### Opciones disponibles
+
+```
+--left INDICE          Índice cámara izquierda (A - laser, por defecto 0)
+--right INDICE         Índice cámara derecha (B - UV, por defecto 1)
+--rows FILAS           Filas tablero (por defecto 6)
+--cols COLUMNAS        Columnas tablero (por defecto 9)
+--square-size TAMANO   Tamaño cuadrado en mm (por defecto 25.0)
+--images NUMERO        Número de pares a capturar (por defecto 15)
+--pattern-type TIPO    Tipo de patrón: chessboard, circles, charuco
+--no-auto-capture      Deshabilitar captura automática y usar barra espaciadora
+--fps FPS              FPS objetivo para las cámaras
+--aruco-dict DICCIONARIO  Diccionario ArUco para ChArUco (usar 'auto' para detección automática)
+--uv-brightness VALOR  Brillo para la cámara UV
+--uv-contrast VALOR    Contraste para la cámara UV
+```
+
+### Controles durante la calibración
+
+- **Barra espaciadora**: Capturar imagen (en modo manual)
+- **q**: Salir
+- **+**: Aumentar brillo de la cámara UV
+- **-**: Disminuir brillo de la cámara UV
+- **c**: Aumentar contraste de la cámara UV
+- **x**: Disminuir contraste de la cámara UV
+
+## Salida
+
+El programa genera dos archivos de calibración:
+- `stereo_calibration.txt`: Resultados técnicos de la calibración
+- `stereo_calibration_seal.txt`: Archivo de calibración compatible con SEAL
+
+## Notas
+
+- Asegúrate de tener permisos de acceso a la cámara en tu sistema
+- Para macOS, otorga permisos de cámara a Terminal/Python en Preferencias del Sistema
 
 ---
 
