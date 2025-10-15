@@ -34,7 +34,66 @@ class CameraStream:
         self.initialized = False
         self.last_error = ""
         
-    def start(self):
+    def _test_camera_property(self, prop_id, prop_name):
+        """Prueba si una propiedad de cámara es compatible y se puede ajustar"""
+        try:
+            # Obtener valor actual
+            current_value = self.cap.get(prop_id)
+            
+            # Intentar establecer un valor ligeramente diferente
+            test_value = current_value + 0.1 if current_value < 0.9 else current_value - 0.1
+            success_set = self.cap.set(prop_id, test_value)
+            
+            # Verificar si el valor se aplicó
+            new_value = self.cap.get(prop_id)
+            success_get = abs(new_value - test_value) <= 0.01
+            
+            # Restaurar valor original
+            self.cap.set(prop_id, current_value)
+            
+            return success_set and success_get, current_value
+        except Exception as e:
+            return False, None
+    
+    def _detect_camera_capabilities(self):
+        """Detecta las capacidades de la cámara"""
+        capabilities = {}
+        
+        # Propiedades comunes a verificar
+        properties = {
+            'BRIGHTNESS': cv2.CAP_PROP_BRIGHTNESS,
+            'CONTRAST': cv2.CAP_PROP_CONTRAST,
+            'SATURATION': cv2.CAP_PROP_SATURATION,
+            'HUE': cv2.CAP_PROP_HUE,
+            'GAIN': cv2.CAP_PROP_GAIN,
+            'EXPOSURE': cv2.CAP_PROP_EXPOSURE,
+            'AUTO_EXPOSURE': cv2.CAP_PROP_AUTO_EXPOSURE
+        }
+        
+        print(f"[INFO] Detectando capacidades de cámara {self.camera_index} ({self.name})...")
+        
+        for prop_name, prop_id in properties.items():
+            try:
+                supported, current_value = self._test_camera_property(prop_id, prop_name)
+                if supported:
+                    capabilities[prop_name] = {'supported': True, 'current_value': current_value}
+                    print(f"[INFO] {prop_name}: SOPORTADO (Valor actual: {current_value:.2f})")
+                else:
+                    # Verificar si al menos se puede leer
+                    try:
+                        current_value = self.cap.get(prop_id)
+                        capabilities[prop_name] = {'supported': False, 'current_value': current_value}
+                        print(f"[INFO] {prop_name}: NO AJUSTABLE (Valor actual: {current_value:.2f})")
+                    except:
+                        capabilities[prop_name] = {'supported': False, 'current_value': None}
+                        print(f"[INFO] {prop_name}: NO SOPORTADO")
+            except Exception as e:
+                capabilities[prop_name] = {'supported': False, 'current_value': None}
+                print(f"[INFO] {prop_name}: ERROR - {str(e)}")
+        
+        return capabilities
+    
+    def start(self, brightness=None, contrast=None):
         """Inicia el stream de la cámara"""
         print(f"[INFO] Iniciando cámara {self.camera_index} ({self.name})...")
         print(f"[INFO] Si ves el error 'not authorized to capture video', otorga permisos de cámara a Terminal/Python")
@@ -53,6 +112,44 @@ class CameraStream:
                     
                     # Configurar propiedades de la cámara
                     self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    
+                    # Detectar capacidades de la cámara
+                    capabilities = self._detect_camera_capabilities()
+                    
+                    # Configurar brillo y contraste si se especifican
+                    if brightness is not None:
+                        if capabilities.get('BRIGHTNESS', {}).get('supported', False):
+                            print(f"[INFO] Intentando establecer brillo a {brightness} para cámara {self.camera_index}")
+                            success = self.cap.set(cv2.CAP_PROP_BRIGHTNESS, brightness)
+                            actual = self.cap.get(cv2.CAP_PROP_BRIGHTNESS)
+                            if success:
+                                if abs(actual - brightness) <= 0.01:
+                                    print(f"[INFO] Brillo establecido correctamente a {actual:.2f}")
+                                else:
+                                    print(f"[WARNING] Brillo ajustado pero con diferencia. Solicitado: {brightness}, Actual: {actual:.2f}")
+                                    print(f"[INFO] Esto puede deberse a que la cámara solo acepta valores discretos o tiene un rango limitado")
+                            else:
+                                print(f"[ERROR] Fallo al establecer brillo. La cámara puede no soportar esta propiedad.")
+                                print(f"[INFO] Valor actual: {actual:.2f}")
+                        else:
+                            print(f"[WARNING] Brillo no se puede ajustar en esta cámara. Propiedad no soportada.")
+                    
+                    if contrast is not None:
+                        if capabilities.get('CONTRAST', {}).get('supported', False):
+                            print(f"[INFO] Intentando establecer contraste a {contrast} para cámara {self.camera_index}")
+                            success = self.cap.set(cv2.CAP_PROP_CONTRAST, contrast)
+                            actual = self.cap.get(cv2.CAP_PROP_CONTRAST)
+                            if success:
+                                if abs(actual - contrast) <= 0.01:
+                                    print(f"[INFO] Contraste establecido correctamente a {actual:.2f}")
+                                else:
+                                    print(f"[WARNING] Contraste ajustado pero con diferencia. Solicitado: {contrast}, Actual: {actual:.2f}")
+                                    print(f"[INFO] Esto puede deberse a que la cámara solo acepta valores discretos o tiene un rango limitado")
+                            else:
+                                print(f"[ERROR] Fallo al establecer contraste. La cámara puede no soportar esta propiedad.")
+                                print(f"[INFO] Valor actual: {actual:.2f}")
+                        else:
+                            print(f"[WARNING] Contraste no se puede ajustar en esta cámara. Propiedad no soportada.")
                     
                     # Verificar que podemos leer un frame
                     ret, frame = self.cap.read()
@@ -90,13 +187,23 @@ class CameraStream:
         try:
             width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            fps = self.cap.get(cv2.CAP_PROP_FPS)
-            print(f"[INFO] Cámara {self.camera_index} ({self.name}): {width}x{height} @ {fps} FPS")
+            theoretical_fps = self.cap.get(cv2.CAP_PROP_FPS)
+            print(f"[INFO] Cámara {self.camera_index} ({self.name}): {width}x{height} @ {theoretical_fps} FPS (teórico)")
+            
+            # Mostrar brillo y contraste actuales
+            brightness_val = self.cap.get(cv2.CAP_PROP_BRIGHTNESS)
+            contrast_val = self.cap.get(cv2.CAP_PROP_CONTRAST)
+            print(f"[INFO] Brillo actual: {brightness_val:.2f}, Contraste actual: {contrast_val:.2f}")
             
             # Probar diferentes codecs/formats como en el test
             fourcc = int(self.cap.get(cv2.CAP_PROP_FOURCC))
             fourcc_str = "".join([chr((fourcc >> 8 * i) & 0xFF) for i in range(4)])
             print(f"[INFO] FOURCC: {fourcc} ({fourcc_str})")
+            
+            # Inicializar variables para medir FPS real
+            self.actual_fps = 0
+            self.frame_count = 0
+            self.start_time = time.time()
         except Exception as e:
             print(f"[WARNING] No se pudieron obtener propiedades de cámara {self.camera_index}: {str(e)}")
             width, height = 640, 480  # Valores por defecto
@@ -113,6 +220,7 @@ class CameraStream:
         """Bucle de captura en hilo separado"""
         self.frame_count = 0
         self.start_time = time.time()
+        last_fps_report = time.time()
         
         while self.running and self.cap and self.cap.isOpened():
             try:
@@ -121,10 +229,16 @@ class CameraStream:
                     # Calcular FPS real
                     self.frame_count += 1
                     current_time = time.time()
-                    if current_time - self.start_time >= 1.0:
-                        self.actual_fps = self.frame_count / (current_time - self.start_time)
+                    
+                    # Reportar FPS cada 2 segundos para mejor seguimiento
+                    if current_time - last_fps_report >= 2.0:
+                        elapsed = current_time - self.start_time
+                        if elapsed > 0:
+                            self.actual_fps = self.frame_count / elapsed
+                            print(f"[FPS] Cámara {self.camera_index} ({self.name}): Teórico={self.cap.get(cv2.CAP_PROP_FPS):.1f}, Real={self.actual_fps:.1f}")
                         self.frame_count = 0
                         self.start_time = current_time
+                        last_fps_report = current_time
                     
                     # Actualizar último frame
                     self.last_frame = frame.copy()
@@ -413,8 +527,10 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
     Calibra cámaras estéreo usando dos cámaras físicas diferentes.
     """
     
-    temp_dir = tempfile.mkdtemp()
-    print(f"[INFO] Directorio temporal: {temp_dir}")
+    # Crear directorio para guardar imágenes de calibración
+    temp_dir = os.path.join(os.getcwd(), "calib_imgs")
+    os.makedirs(temp_dir, exist_ok=True)
+    print(f"[INFO] Directorio de imágenes: {temp_dir}")
     
     # Inicializar streams de cámara
     # Cámara A (laser) = izquierda = índice 0
@@ -442,20 +558,34 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
             if not left_success or not left_stream.is_initialized():
                 raise RuntimeError(f"No se pudo iniciar cámara izquierda (A - laser) {camera_left_index}")
         
-        # Configurar brillo y contraste de la cámara UV si se especifican
-        if uv_brightness >= 0 and right_stream.cap and right_stream.cap.isOpened():
-            right_stream.cap.set(cv2.CAP_PROP_BRIGHTNESS, uv_brightness)
-            print(f"[INFO] Brillo de cámara UV ajustado a: {uv_brightness}")
-        if uv_contrast >= 0 and right_stream.cap and right_stream.cap.isOpened():
-            right_stream.cap.set(cv2.CAP_PROP_CONTRAST, uv_contrast)
-            print(f"[INFO] Contraste de cámara UV ajustado a: {uv_contrast}")
+        # Preparar brillo y contraste para la cámara UV si se especifican
+        target_brightness = None
+        target_contrast = None
+        if uv_brightness >= 0:
+            target_brightness = float(uv_brightness)/100.0
+        if uv_contrast >= 0:
+            target_contrast = float(uv_contrast)/100.0
         
         # Esperar más tiempo antes de iniciar la segunda cámara
         print("[INFO] Esperando 2 segundos antes de iniciar cámara derecha...")
         time.sleep(2.0)
         
         print("[INFO] Iniciando cámara derecha (B - UV)...")
-        right_success = right_stream.start()
+        right_success = right_stream.start(brightness=target_brightness, contrast=target_contrast)
+        
+        if not right_success or not right_stream.is_initialized():
+            print(f"[ERROR] No se pudo iniciar cámara derecha (B - UV) {camera_right_index}")
+            # Mostrar información adicional de error
+            if hasattr(right_stream, 'last_error') and right_stream.last_error:
+                print(f"[ERROR] Detalles: {right_stream.last_error}")
+            print(f"[ERROR] Posible solución: Otorga permisos de cámara a Terminal/Python en Preferencias del Sistema")
+            # Intentar reiniciar la cámara con un enfoque más robusto
+            print("[INFO] Intentando reiniciar cámara derecha con enfoque más robusto...")
+            right_stream = CameraStream(camera_right_index, "UV (B)")
+            right_success = right_stream.start(brightness=target_brightness, contrast=target_contrast)
+            
+            if not right_success or not right_stream.is_initialized():
+                raise RuntimeError(f"No se pudo iniciar cámara derecha (B - UV) {camera_right_index}")
         
         if not right_success or not right_stream.is_initialized():
             print(f"[ERROR] No se pudo iniciar cámara derecha (B - UV) {camera_right_index}")
@@ -517,6 +647,18 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
             # Ajustes específicos para ChArUco
             detection_flags = None  # No se usa para ChArUco
             print("[INFO] Usando patrón ChArUco con detección de marcadores ArUco")
+        elif pattern_type == "bricks":
+            # Para patrón tipo bricks, preparar puntos de objeto
+            # El patrón bricks tiene una estructura específica donde las filas alternan
+            objp = np.zeros((checkerboard_rows * checkerboard_cols, 3), np.float32)
+            for i in range(checkerboard_rows):
+                for j in range(checkerboard_cols):
+                    # Para patrón bricks, desplazamos las filas pares
+                    x_offset = (i % 2) * (square_size_mm / 2)
+                    objp[i * checkerboard_cols + j, 0] = j * square_size_mm + x_offset
+                    objp[i * checkerboard_cols + j, 1] = i * square_size_mm
+            detection_flags = cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_FAST_CHECK | cv2.CALIB_CB_NORMALIZE_IMAGE
+            print("[INFO] Usando patrón tipo bricks")
         
         objp *= square_size_mm
         
@@ -820,6 +962,23 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
                     # Fallback si no se inicializó correctamente el detector ChArUco
                     right_found, right_corners = detector.detect_pattern(
                         gray_right, (checkerboard_cols, checkerboard_rows), "right")
+                elif pattern_type == "bricks":
+                    # Para patrón bricks, usamos una aproximación similar al tablero de ajedrez
+                    # pero con ajustes para la estructura específica
+                    try:
+                        right_found, right_corners = cv2.findChessboardCorners(
+                            gray_right, (checkerboard_cols, checkerboard_rows), 
+                            flags=cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_FAST_CHECK | cv2.CALIB_CB_NORMALIZE_IMAGE)
+                        # Si no se encuentra el patrón completo, intentamos con variaciones
+                        if not right_found:
+                            # Intentar con un tamaño ligeramente diferente
+                            right_found, right_corners = cv2.findChessboardCorners(
+                                gray_right, (checkerboard_cols-1, checkerboard_rows), 
+                                flags=cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_FAST_CHECK | cv2.CALIB_CB_NORMALIZE_IMAGE)
+                    except Exception as e:
+                        print(f"[WARNING] Error en detección de patrón bricks cámara derecha: {e}")
+                        right_found = False
+                        right_corners = None
                 else:
                     right_found = False
                     right_corners = None
@@ -890,6 +1049,22 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
                     # Fallback si no se inicializó correctamente el detector ChArUco
                     left_found, left_corners = detector.detect_pattern(
                         gray_left, (checkerboard_cols, checkerboard_rows), "left")
+                elif pattern_type == "bricks":
+                    # Para patrón bricks, usamos una aproximación similar al tablero de ajedrez
+                    try:
+                        left_found, left_corners = cv2.findChessboardCorners(
+                            gray_left, (checkerboard_cols, checkerboard_rows), 
+                            flags=cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_FAST_CHECK | cv2.CALIB_CB_NORMALIZE_IMAGE)
+                        # Si no se encuentra el patrón completo, intentamos con variaciones
+                        if not left_found:
+                            # Intentar con un tamaño ligeramente diferente
+                            left_found, left_corners = cv2.findChessboardCorners(
+                                gray_left, (checkerboard_cols-1, checkerboard_rows), 
+                                flags=cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_FAST_CHECK | cv2.CALIB_CB_NORMALIZE_IMAGE)
+                    except Exception as e:
+                        print(f"[WARNING] Error en detección de patrón bricks cámara izquierda: {e}")
+                        left_found = False
+                        left_corners = None
                 else:
                     left_found = False
                     left_corners = None
@@ -929,6 +1104,12 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
                         right_corners_adjusted[:, :, 0] += target_width  # Añadir offset de ancho para posición correcta
                         cv2.drawChessboardCorners(display_combined, (checkerboard_cols, checkerboard_rows), 
                                                 right_corners_adjusted, right_found)
+                    elif pattern_type == "bricks":
+                        # Para patrón bricks, usar el mismo enfoque que el tablero de ajedrez
+                        right_corners_adjusted = right_corners.copy()
+                        right_corners_adjusted[:, :, 0] += target_width  # Añadir offset de ancho para posición correcta
+                        cv2.drawChessboardCorners(display_combined, (checkerboard_cols, checkerboard_rows), 
+                                                right_corners_adjusted, right_found)
                 except Exception as e:
                     print(f"[WARNING] Error dibujando esquinas derecha: {e}")
             if left_found and left_corners is not None:
@@ -947,6 +1128,10 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
                             cv2.drawChessboardCorners(display_combined, (checkerboard_cols, checkerboard_rows), 
                                                     left_corners, left_found)
                     elif pattern_type == "circles":
+                        cv2.drawChessboardCorners(display_combined, (checkerboard_cols, checkerboard_rows), 
+                                                left_corners, left_found)
+                    elif pattern_type == "bricks":
+                        # Para patrón bricks, usar el mismo enfoque que el tablero de ajedrez
                         cv2.drawChessboardCorners(display_combined, (checkerboard_cols, checkerboard_rows), 
                                                 left_corners, left_found)
                 except Exception as e:
@@ -994,23 +1179,59 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
                     elif key == ord('+') and right_stream.cap and right_stream.cap.isOpened():
                         # Aumentar brillo de la cámara UV
                         current_brightness = right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)
-                        right_stream.cap.set(cv2.CAP_PROP_BRIGHTNESS, min(1.0, current_brightness + 0.1))
-                        print(f"[INFO] Brillo UV aumentado a: {right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)}")
+                        new_brightness = min(1.0, current_brightness + 0.1)
+                        success = right_stream.cap.set(cv2.CAP_PROP_BRIGHTNESS, new_brightness)
+                        actual_brightness = right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)
+                        if success:
+                            if abs(actual_brightness - new_brightness) <= 0.01:
+                                print(f"[INFO] Brillo UV aumentado a: {actual_brightness:.2f}")
+                            else:
+                                print(f"[WARNING] Brillo UV ajustado pero con diferencia. Solicitado: {new_brightness:.2f}, Actual: {actual_brightness:.2f}")
+                        else:
+                            print(f"[ERROR] No se pudo ajustar brillo UV. La cámara puede no soportar esta propiedad.")
+                            print(f"[INFO] Valor actual: {actual_brightness:.2f}")
                     elif key == ord('-') and right_stream.cap and right_stream.cap.isOpened():
                         # Disminuir brillo de la cámara UV
                         current_brightness = right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)
-                        right_stream.cap.set(cv2.CAP_PROP_BRIGHTNESS, max(-1.0, current_brightness - 0.1))
-                        print(f"[INFO] Brillo UV disminuido a: {right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)}")
+                        new_brightness = max(-1.0, current_brightness - 0.1)
+                        success = right_stream.cap.set(cv2.CAP_PROP_BRIGHTNESS, new_brightness)
+                        actual_brightness = right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)
+                        if success:
+                            if abs(actual_brightness - new_brightness) <= 0.01:
+                                print(f"[INFO] Brillo UV disminuido a: {actual_brightness:.2f}")
+                            else:
+                                print(f"[WARNING] Brillo UV ajustado pero con diferencia. Solicitado: {new_brightness:.2f}, Actual: {actual_brightness:.2f}")
+                        else:
+                            print(f"[ERROR] No se pudo ajustar brillo UV. La cámara puede no soportar esta propiedad.")
+                            print(f"[INFO] Valor actual: {actual_brightness:.2f}")
                     elif key == ord('c') and right_stream.cap and right_stream.cap.isOpened():
                         # Aumentar contraste de la cámara UV
                         current_contrast = right_stream.cap.get(cv2.CAP_PROP_CONTRAST)
-                        right_stream.cap.set(cv2.CAP_PROP_CONTRAST, min(1.0, current_contrast + 0.1))
-                        print(f"[INFO] Contraste UV aumentado a: {right_stream.cap.get(cv2.CAP_PROP_CONTRAST)}")
+                        new_contrast = min(1.0, current_contrast + 0.1)
+                        success = right_stream.cap.set(cv2.CAP_PROP_CONTRAST, new_contrast)
+                        actual_contrast = right_stream.cap.get(cv2.CAP_PROP_CONTRAST)
+                        if success:
+                            if abs(actual_contrast - new_contrast) <= 0.01:
+                                print(f"[INFO] Contraste UV aumentado a: {actual_contrast:.2f}")
+                            else:
+                                print(f"[WARNING] Contraste UV ajustado pero con diferencia. Solicitado: {new_contrast:.2f}, Actual: {actual_contrast:.2f}")
+                        else:
+                            print(f"[ERROR] No se pudo ajustar contraste UV. La cámara puede no soportar esta propiedad.")
+                            print(f"[INFO] Valor actual: {actual_contrast:.2f}")
                     elif key == ord('x') and right_stream.cap and right_stream.cap.isOpened():
                         # Disminuir contraste de la cámara UV
                         current_contrast = right_stream.cap.get(cv2.CAP_PROP_CONTRAST)
-                        right_stream.cap.set(cv2.CAP_PROP_CONTRAST, max(-1.0, current_contrast - 0.1))
-                        print(f"[INFO] Contraste UV disminuido a: {right_stream.cap.get(cv2.CAP_PROP_CONTRAST)}")
+                        new_contrast = max(-1.0, current_contrast - 0.1)
+                        success = right_stream.cap.set(cv2.CAP_PROP_CONTRAST, new_contrast)
+                        actual_contrast = right_stream.cap.get(cv2.CAP_PROP_CONTRAST)
+                        if success:
+                            if abs(actual_contrast - new_contrast) <= 0.01:
+                                print(f"[INFO] Contraste UV disminuido a: {actual_contrast:.2f}")
+                            else:
+                                print(f"[WARNING] Contraste UV ajustado pero con diferencia. Solicitado: {new_contrast:.2f}, Actual: {actual_contrast:.2f}")
+                        else:
+                            print(f"[ERROR] No se pudo ajustar contraste UV. La cámara puede no soportar esta propiedad.")
+                            print(f"[INFO] Valor actual: {actual_contrast:.2f}")
                 except Exception as e:
                     print(f"[ERROR] Error al procesar tecla: {e}")
         
@@ -1069,6 +1290,10 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
                             elif pattern_type == "circles":
                                 # Para círculos no se necesita subpixel
                                 imgpoints_right.append(right_corners.copy())
+                            elif pattern_type == "bricks":
+                                # Refinamiento para patrón bricks (similar al tablero de ajedrez)
+                                right_corners_refined = cv2.cornerSubPix(gray_right, right_corners, (11, 11), (-1, -1), criteria)
+                                imgpoints_right.append(right_corners_refined.copy() if right_corners_refined is not None else right_corners.copy())
                         if left_corners is not None:
                             if pattern_type == "chessboard":
                                 # Refinamiento para tablero de ajedrez
@@ -1080,6 +1305,10 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
                             elif pattern_type == "circles":
                                 # Para círculos no se necesita subpixel
                                 imgpoints_left.append(left_corners.copy())
+                            elif pattern_type == "bricks":
+                                # Refinamiento para patrón bricks (similar al tablero de ajedrez)
+                                left_corners_refined = cv2.cornerSubPix(gray_left, left_corners, (11, 11), (-1, -1), criteria)
+                                imgpoints_left.append(left_corners_refined.copy() if left_corners_refined is not None else left_corners.copy())
                         
                         # Añadir puntos de objeto
                         objpoints.append(objp.copy())
@@ -1104,23 +1333,59 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
                     elif key == ord('+') and right_stream.cap and right_stream.cap.isOpened():
                         # Aumentar brillo de la cámara UV
                         current_brightness = right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)
-                        right_stream.cap.set(cv2.CAP_PROP_BRIGHTNESS, min(1.0, current_brightness + 0.1))
-                        print(f"[INFO] Brillo UV aumentado a: {right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)}")
+                        new_brightness = min(1.0, current_brightness + 0.1)
+                        success = right_stream.cap.set(cv2.CAP_PROP_BRIGHTNESS, new_brightness)
+                        actual_brightness = right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)
+                        if success:
+                            if abs(actual_brightness - new_brightness) <= 0.01:
+                                print(f"[INFO] Brillo UV aumentado a: {actual_brightness:.2f}")
+                            else:
+                                print(f"[WARNING] Brillo UV ajustado pero con diferencia. Solicitado: {new_brightness:.2f}, Actual: {actual_brightness:.2f}")
+                        else:
+                            print(f"[ERROR] No se pudo ajustar brillo UV. La cámara puede no soportar esta propiedad.")
+                            print(f"[INFO] Valor actual: {actual_brightness:.2f}")
                     elif key == ord('-') and right_stream.cap and right_stream.cap.isOpened():
                         # Disminuir brillo de la cámara UV
                         current_brightness = right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)
-                        right_stream.cap.set(cv2.CAP_PROP_BRIGHTNESS, max(-1.0, current_brightness - 0.1))
-                        print(f"[INFO] Brillo UV disminuido a: {right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)}")
+                        new_brightness = max(-1.0, current_brightness - 0.1)
+                        success = right_stream.cap.set(cv2.CAP_PROP_BRIGHTNESS, new_brightness)
+                        actual_brightness = right_stream.cap.get(cv2.CAP_PROP_BRIGHTNESS)
+                        if success:
+                            if abs(actual_brightness - new_brightness) <= 0.01:
+                                print(f"[INFO] Brillo UV disminuido a: {actual_brightness:.2f}")
+                            else:
+                                print(f"[WARNING] Brillo UV ajustado pero con diferencia. Solicitado: {new_brightness:.2f}, Actual: {actual_brightness:.2f}")
+                        else:
+                            print(f"[ERROR] No se pudo ajustar brillo UV. La cámara puede no soportar esta propiedad.")
+                            print(f"[INFO] Valor actual: {actual_brightness:.2f}")
                     elif key == ord('c') and right_stream.cap and right_stream.cap.isOpened():
                         # Aumentar contraste de la cámara UV
                         current_contrast = right_stream.cap.get(cv2.CAP_PROP_CONTRAST)
-                        right_stream.cap.set(cv2.CAP_PROP_CONTRAST, min(1.0, current_contrast + 0.1))
-                        print(f"[INFO] Contraste UV aumentado a: {right_stream.cap.get(cv2.CAP_PROP_CONTRAST)}")
+                        new_contrast = min(1.0, current_contrast + 0.1)
+                        success = right_stream.cap.set(cv2.CAP_PROP_CONTRAST, new_contrast)
+                        actual_contrast = right_stream.cap.get(cv2.CAP_PROP_CONTRAST)
+                        if success:
+                            if abs(actual_contrast - new_contrast) <= 0.01:
+                                print(f"[INFO] Contraste UV aumentado a: {actual_contrast:.2f}")
+                            else:
+                                print(f"[WARNING] Contraste UV ajustado pero con diferencia. Solicitado: {new_contrast:.2f}, Actual: {actual_contrast:.2f}")
+                        else:
+                            print(f"[ERROR] No se pudo ajustar contraste UV. La cámara puede no soportar esta propiedad.")
+                            print(f"[INFO] Valor actual: {actual_contrast:.2f}")
                     elif key == ord('x') and right_stream.cap and right_stream.cap.isOpened():
                         # Disminuir contraste de la cámara UV
                         current_contrast = right_stream.cap.get(cv2.CAP_PROP_CONTRAST)
-                        right_stream.cap.set(cv2.CAP_PROP_CONTRAST, max(-1.0, current_contrast - 0.1))
-                        print(f"[INFO] Contraste UV disminuido a: {right_stream.cap.get(cv2.CAP_PROP_CONTRAST)}")
+                        new_contrast = max(-1.0, current_contrast - 0.1)
+                        success = right_stream.cap.set(cv2.CAP_PROP_CONTRAST, new_contrast)
+                        actual_contrast = right_stream.cap.get(cv2.CAP_PROP_CONTRAST)
+                        if success:
+                            if abs(actual_contrast - new_contrast) <= 0.01:
+                                print(f"[INFO] Contraste UV disminuido a: {actual_contrast:.2f}")
+                            else:
+                                print(f"[WARNING] Contraste UV ajustado pero con diferencia. Solicitado: {new_contrast:.2f}, Actual: {actual_contrast:.2f}")
+                        else:
+                            print(f"[ERROR] No se pudo ajustar contraste UV. La cámara puede no soportar esta propiedad.")
+                            print(f"[INFO] Valor actual: {actual_contrast:.2f}")
                 except Exception as e:
                     print(f"[ERROR] Error al procesar tecla: {e}")
                 
@@ -1182,10 +1447,9 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
         raise e
         
     finally:
-        try:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-        except:
-            pass
+        # No eliminar el directorio de imágenes para que queden guardadas
+        print(f"[INFO] Imágenes de calibración guardadas en: {temp_dir}")
+        pass
 
 
 def main():
@@ -1200,8 +1464,8 @@ def main():
     parser.add_argument("--template", type=str, default="calibJMS1006207.txt", help="Archivo plantilla SEAL")
     parser.add_argument("--dev-id", type=str, default="JMS1006207", help="ID del dispositivo")
     parser.add_argument("--test", action="store_true", help="Modo test para debuggear cámaras individuales")
-    parser.add_argument("--pattern-type", type=str, default="chessboard", choices=["chessboard", "circles", "charuco"], 
-                       help="Tipo de patrón de calibración: chessboard, circles, charuco")
+    parser.add_argument("--pattern-type", type=str, default="chessboard", choices=["chessboard", "circles", "charuco", "bricks"], 
+                       help="Tipo de patrón de calibración: chessboard, circles, charuco, bricks")
     parser.add_argument("--uv-brightness", type=int, default=-1, help="Brillo para la cámara UV (-1 para no cambiar)")
     parser.add_argument("--uv-contrast", type=int, default=-1, help="Contraste para la cámara UV (-1 para no cambiar)")
     parser.add_argument("--fps", type=float, default=None, help="FPS objetivo para las cámaras (por defecto usa FPS nativo)")
