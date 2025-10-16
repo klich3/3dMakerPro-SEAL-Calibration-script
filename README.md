@@ -59,10 +59,18 @@ Frustrated by the lack of a solution (even with a warranty), I developed this **
 
 
 ### Problem:
-<video src="Content/Problem/problem_no_see_nothing.mp4" controls preload height="460"></video>
+<!-- Si el video no se carga, puedes verlo directamente en: https://github.com/klich3/3dMakerPro-SEAL-Calibration-script/blob/main/Content/Problem/problem_no_see_nothing.mp4 -->
+<video src="https://github.com/klich3/3dMakerPro-SEAL-Calibration-script/raw/main/Content/Problem/problem_no_see_nothing.mp4" controls preload="metadata" width="500">
+  Tu navegador no soporta la etiqueta de video. Puedes ver el video directamente en: 
+  <a href="https://github.com/klich3/3dMakerPro-SEAL-Calibration-script/blob/main/Content/Problem/problem_no_see_nothing.mp4">Problem Video</a>
+</video>
 
 ### Solution after calibration:
-<video src="Content/After_calibration/scan_point_increse.mp4" controls preload height="460"></video>
+<!-- Si el video no se carga, puedes verlo directamente en: https://github.com/klich3/3dMakerPro-SEAL-Calibration-script/blob/main/Content/After%20calibration/scan_point_increse.mp4 -->
+<video src="https://github.com/klich3/3dMakerPro-SEAL-Calibration-script/raw/main/Content/After%20calibration/scan_point_increse.mp4" controls preload="metadata" width="500">
+  Tu navegador no soporta la etiqueta de video. Puedes ver el video directamente en: 
+  <a href="https://github.com/klich3/3dMakerPro-SEAL-Calibration-script/blob/main/Content/After%20calibration/scan_point_increse.mp4">Solution Video</a>
+</video>
 
 ---
 
