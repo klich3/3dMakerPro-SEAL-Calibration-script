@@ -213,8 +213,7 @@ python stereo_calibration.py
 
 # Calibración con parámetros específicos
 python stereo_calibration.py --left 0 --right 1 --rows 6 --cols 9 --square-size 25.0
-python stereo_calibration.py --left 1 --right 0 --rows 6 --cols 9 --square-size 6.60 --images 15 --output stereo_calibration.txt --template calibJMS1006207.txt --dev-id JMS1006207
-python stereo_calibration.py --left 1 --right 0 --rows 6 --cols 9 --square-size 3 --images 15 --output stereo_calibration.txt --template calibJMS1006207.txt --dev-id JMS1006207 --no-auto-capture
+python stereo_calibration.py --rows 6 --cols 9 --square-size 3 --images 15 --output stereo_calibration.txt --template calibJMS1006207.txt --dev-id JMS1006207 --no-auto-capture
 
 # Usar patrón de círculos
 python stereo_calibration.py --pattern-type circles
