@@ -1,9 +1,43 @@
-# 3DMakerpro Seal Lite re-calibration
+# 3DMakerpro Seal Lite Re-calibration
 
 > Tools for **stereo camera calibration** and **3D reconstruction** with laser and UV, developed independently for the **3DMakerPro SEAL Lite** scanner.
 
 - 🔬 **Compatibility**: tested **exclusively with 3DMakerPro SEAL Lite**.
 - 🙅‍♂️ Project **not affiliated** with 3DMakerPro or distributors.
+
+> [!WARNING]  
+> This software is provided **as is**, without warranty of any kind.
+> 
+> - Misuse may **void the warranty** of the device.
+> - The author **is not responsible** for any damage, loss, or failure resulting from use or misuse.
+> 
+> **Use it at your own risk and discretion.**
+
+---
+
+## Table of Contents
+- [Context / Background](#context--background)
+- [Preparation](#preparation)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Technical Description](#technical-description)
+- [Camera Permissions in macOS](#camera-permissions-in-macos)
+- [Quick Start](#quick-start)
+- [Interactive Session](#interactive-session)
+- [Calibration Template](#calibration-template)
+- [Implementation Details](#implementation-details)
+- [Quick Diagnosis](#quick-diagnosis)
+- [Notes / Best Practices](#notes--best-practices)
+- [UV Brightness/Contrast Types](#types-of-uv-brightnesscontrast-optional)
+- [Detected USB Cameras](#detected-usb-cameras)
+- [Camera Configuration](#camera-configuration)
+- [Main Scripts](#main-scripts)
+- [Features](#features)
+- [Requirements](#requirements)
+- [Available Options](#available-options)
+- [Controls During Calibration](#controls-during-calibration)
+- [Output](#output)
+- [Documentation](#documentation)
 
 ---
 
@@ -18,21 +52,74 @@ The following attempts were made, without success:
 
 Frustrated by the lack of a solution (even with a warranty), I developed this **proprietary calibration tool** based on **OpenCV** to restore functionality and better understand the device.
 
+> [!NOTE]  
+> They don't really provide technical support. I don't know the rate of complaints from users who can't scan. It's been two weeks and I still don't have a solution, and the technicians aren't doing anything about it.
+> I think releasing a tool that can calibrate would alleviate the situation, so I've decided to release the tool so that users can do it themselves.
+
+
+
+### Problem:
+<video src="/Content/Problem/problem_no_see_nothing.mp4" width="500"></video>
+
+### Solution:
+<video src="/Content/After calibration/scan_point_increse.mp4" width="500"></video>
+
+
+
 ---
 
-## ⚠️ Notice and Disclaimer
+## Preparation
 
-This software is provided **as is**, **without warranty** of any kind.
+To calibrate both cameras, you need to remove the pattern projection from one of the UV cameras. I did this with a "smoked film" that just allowed me to do it. You can also use a UV flashlight to be able to see in that camera.
 
-- Misuse may **void the warranty** of the device.
-- The author **is not responsible** for any damage, loss, or failure resulting from use or misuse.
-- Each user is **fully responsible** for its execution and consequences.
+<details>
+<summary>🔧 Setup Instructions (click to expand)</summary>
 
-**Use it at your own risk and discretion.**
+### Step 1: Camera Preparation
+Paste the smoked film on the left side looking from the back, or use a UV flashlight for the UV camera.
+
+| Smoked Film Application | UV Flashlight Setup |
+|:----------------------:|:-------------------:|
+| ![Smoked Film](Content/Setup/IMG_3858.HEIC.jpg) | ![UV Flashlight](Content/Setup/IMG_3859.HEIC.jpg) |
+
+### Step 2: Calibration Pattern
+For the UV flashlight, use a chessboard pattern that is in the folder `patterns/2-sets-of-patterns-in-a4.pdf`. I used the smaller pattern which is 9x6 and each square is 3mm.
+
+| Pattern Placement | Close-up View |
+|:----------------:|:-------------:|
+| ![Pattern Setup](Content/Setup/IMG_3860.HEIC.jpg) | ![Pattern Detail](Content/Setup/IMG_3861.HEIC.jpg) |
+
+### Step 3: Camera Positioning
+It is recommended to use a tripod to stabilize the camera during calibration.
+
+</details>
+
+For calibration, check the images I have left in the `calib_imgs` folder. I follow the pattern as in the image `patterns/pattern.pdf`.
 
 ---
 
-## Technical description
+## Installation
+
+```bash
+uv venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+---
+
+## Usage
+
+The command I used for calibration is:
+```bash
+python stereo_calibration.py --rows 6 --cols 9 --square-size 3 --images 15 --output stereo_calibration.txt --template calibJMS1006207.txt --dev-id JMS1006207 --no-auto-capture
+```
+
+There are more settings, so you can review the [Available Options](#available-options) section.
+
+---
+
+## Technical Description
 
 Stereo calibration and 3D reconstruction tools with pattern support:
 
@@ -46,7 +133,7 @@ Stereo calibration and 3D reconstruction tools with pattern support:
 
 ---
 
-## Camera permissions in macOS from terminal
+## Camera Permissions in macOS
 
 If you see:
 ```
@@ -61,16 +148,6 @@ python3 -c "import cv2; cap=cv2.VideoCapture(0); print('Cam abierta:', cap.isOpe
 ```
 
 If not, in my profile there is a repository for a tool that can grant authorization to programs to access PC devices. ([Repo See here](https://github.com/klich3/sonoma-workaround-allow-services))
-
----
-
-## Installation
-
-```bash
-uv venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
 
 ---
 
@@ -93,7 +170,7 @@ python stereo_calibration.py --pattern-type charuco --rows 7 --cols 5 --square-s
 
 ---
 
-## Interactive session (detection, drawing and auto-capture)
+## Interactive Session (detection, drawing and auto-capture)
 
 During calibration:
 
@@ -116,13 +193,11 @@ During calibration:
 
 ---
 
-## Calibration template (download and attributes)
+## Calibration Template
 
-
-
-**Generate results** and “SEAL compatible” file:
+**Generate results** and "SEAL compatible" file:
 ```bash
-python stereo_calibration.py   --left 0 --right 1   --rows 6 --cols 9 --square-size 25.0   --images 15   --output stereo_calibration.txt   --template calib_SEALLITE_template.txt   --dev-id JMS1006207
+python stereo_calibration.py --left 0 --right 1 --rows 6 --cols 9 --square-size 25.0 --images 15 --output stereo_calibration.txt --template calibJMS1006207.txt --dev-id JMS1006207
 ```
 
 **Attributes** that the script inserts/updates when generating the final file (based on your calibration):
@@ -135,25 +210,25 @@ python stereo_calibration.py   --left 0 --right 1   --rows 6 --cols 9 --square-s
 
 ---
 
-## Implementation details (code summary)
+## Implementation Details
 
 - **Capture and low latency**: `CameraStream` uses `CAP_PROP_BUFFERSIZE=1`, queue `maxsize=3`, real FPS calculation, and cascading backends (`CAP_ANY → CAP_AVFOUNDATION → CAP_V4L2`).  
 - **Cached detection**: `PatternDetector` limits detections to 0.1s intervals to avoid CPU overload.
 - **Patterns**:
-- *Chessboard*: `findChessboardCorners` + `cornerSubPix`  
+  - *Chessboard*: `findChessboardCorners` + `cornerSubPix`  
   - *Asymmetric circles*: `SimpleBlobDetector` + `findCirclesGrid(ASYMMETRIC_GRID)` with direct fallback
-- *ChArUco*: `CharucoDetector` (DICT_6X6_250); during capture, attempts `matchImagePoints` for matches; if it fails, standard fallback  
+  - *ChArUco*: `CharucoDetector` (DICT_6X6_250); during capture, attempts `matchImagePoints` for matches; if it fails, standard fallback  
 - **Auto capture**: when both sides detect a pattern, save `left_XX.jpg` / `right_XX.jpg` (tmp) and accumulate `objpoints/imgpoints`.
 - **Calibration**:
-- Individual A/B: `cv2.calibrateCamera`  
+  - Individual A/B: `cv2.calibrateCamera`  
   - Stereo: `cv2.stereoCalibrate` (criterion `EPS|MAX_ITER`)
 - **Output**:
-- **Technical** file (`--output`) with `K_right`, `dist_right`, `K_left`, `dist_left`, `R`, `T`  
+  - **Technical** file (`--output`) with `K_right`, `dist_right`, `K_left`, `dist_left`, `R`, `T`  
   - **SEAL compatible** file via `seal_calib_writer.write_new_calibration(...)` and metadata update
 
 ---
 
-## Quick diagnosis
+## Quick Diagnosis
 
 Test cameras individually:
 ```bash
@@ -164,7 +239,7 @@ python -c "import stereo_calibration as s; s.test_single_camera(1, 'UV (B)', 10)
 
 ---
 
-## Notes / Best practices
+## Notes / Best Practices
 
 - Start **A (Laser)** first, wait ~2 s, and then **B (UV)**.
 - Fill most of the frame with the pattern and vary angles/distances between captures.
@@ -174,68 +249,73 @@ python -c "import stereo_calibration as s; s.test_single_camera(1, 'UV (B)', 10)
 
 ---
 
+## Types of UV Brightness/Contrast (optional)
 
-## **Types of UV brightness/contrast (optional):** if your backend supports floating point values, use `float` instead of `int` in `argparse`:
-   ```python
-   parser.add_argument("--uv-brightness", type=float, default=-1.0, ...)
-   parser.add_argument("--uv-contrast",  type=float, default=-1.0, ...)
-   ```
+If your backend supports floating point values, use `float` instead of `int` in `argparse`:
+```python
+parser.add_argument("--uv-brightness", type=float, default=-1.0, ...)
+parser.add_argument("--uv-contrast",  type=float, default=-1.0, ...)
+```
 
 ---
 
 ## Detected USB Cameras
 
-```text
+```
 KYT Camera A:
 
-  N.º de modelo:	UVC Camera VendorID_3141 ProductID_25450
+  Model Number:	UVC Camera VendorID_3141 ProductID_25450
   Unique identifier:	0x145110000c45636a
 
 KYT Camera B:
 
-  N.º de modelo:	UVC Camera VendorID_3141 ProductID_25451
+  Model Number:	UVC Camera VendorID_3141 ProductID_25451
   Unique identifier:	0x145120000c45636b
 ```
 
-## Cmera configuration
+---
+
+## Camera Configuration
 
 - Laser camera (front): Index 0
 - UV camera (inclined): Index 1
 
-## Main scripts
+---
+
+## Main Scripts
 
 ### stereo_calibration.py
 Stereo calibration with two cameras:
 
 ```bash
-# Calibración básica
+# Basic calibration
 python stereo_calibration.py
 
-# Calibración con parámetros específicos
+# Calibration with specific parameters
 python stereo_calibration.py --left 0 --right 1 --rows 6 --cols 9 --square-size 25.0
 python stereo_calibration.py --rows 6 --cols 9 --square-size 3 --images 15 --output stereo_calibration.txt --template calibJMS1006207.txt --dev-id JMS1006207 --no-auto-capture
 
-# Usar patrón de círculos
+# Use circle pattern
 python stereo_calibration.py --pattern-type circles
 python stereo_calibration.py --output stereo_calibration.txt --template calibJMS1006207.txt --dev-id JMS1006207 --pattern-type circles --rows 11 --cols 4
 
-# Usar patrón ChArUco
+# Use ChArUco pattern
 python stereo_calibration.py --pattern-type charuco
 python stereo_calibration.py --left 1 --right 0 --images 15 --output stereo_calibration.txt --template calibJMS1006207.txt --dev-id JMS1006207 --pattern-type charuco  --rows 7 --cols 5 --square-size 8.57 --no-auto-capture
 python stereo_calibration.py --left 1 --right 0 --images 15 --output stereo_calibration_charuco.txt --template calibJMS1006207.txt --dev-id JMS1006207 --pattern-type charuco --no-auto-capture --aruco-dict DICT_7X7_250
 
-# Ajustar brillo de cámara UV
+# Adjust UV camera brightness
 python stereo_calibration.py --uv-brightness 0.5 --uv-contrast 0.5
 ```
 
-### Calibration methods
+### Calibration Methods
 
 1. **Chessboard**:
    - Traditional calibration pattern
    - Robust detection in various lighting conditions
    - Requires a completely visible flat pattern
 
-2. **Asymmetric circles:**
+2. **Asymmetric circles**:
    - Pattern of circles arranged in an asymmetric grid
    - Less sensitive to lens distortions
    - Allows partial detection of the pattern
@@ -247,85 +327,79 @@ python stereo_calibration.py --uv-brightness 0.5 --uv-contrast 0.5
 
 ---
 
-# SEAL_CALIB_Builder
+## Features
 
-Herramienta de calibración estéreo para cámaras duales.
+- Simultaneous stereo calibration of two cameras
+- Pattern detection: chessboard, asymmetric circles, and ChArUco
+- Automatic or manual image capture
+- Support for different ArUco dictionaries
+- Brightness and contrast settings for the UV camera
+- FPS control
 
-## Características
+---
 
-- Calibración estéreo de dos cámaras simultáneamente
-- Detección de patrones: tablero de ajedrez, círculos asimétricos y ChArUco
-- Captura automática o manual de imágenes
-- Soporte para diferentes diccionarios ArUco
-- Configuración de brillo y contraste para la cámara UV
-- Control de FPS
-
-## Requisitos
+## Requirements
 
 - Python 3.7+
 - OpenCV 4.5+
 - NumPy
 
-## Instalación
+---
+
+## Installation
 
 ```bash
 pip install -r requirement.txt
 ```
 
-## Uso
+---
 
-### Calibración automática (por defecto)
-
-```bash
-python stereo_calibration.py
-```
-
-### Calibración manual con barra espaciadora
-
-```bash
-python stereo_calibration.py --no-auto-capture
-```
-
-### Opciones disponibles
+## Available Options
 
 ```
---left INDICE          Índice cámara izquierda (A - laser, por defecto 0)
---right INDICE         Índice cámara derecha (B - UV, por defecto 1)
---rows FILAS           Filas tablero (por defecto 6)
---cols COLUMNAS        Columnas tablero (por defecto 9)
---square-size TAMANO   Tamaño cuadrado en mm (por defecto 25.0)
---images NUMERO        Número de pares a capturar (por defecto 15)
---pattern-type TIPO    Tipo de patrón: chessboard, circles, charuco
---no-auto-capture      Deshabilitar captura automática y usar barra espaciadora
---fps FPS              FPS objetivo para las cámaras
---aruco-dict DICCIONARIO  Diccionario ArUco para ChArUco (usar 'auto' para detección automática)
---uv-brightness VALOR  Brillo para la cámara UV
---uv-contrast VALOR    Contraste para la cámara UV
+--left INDEX          Left camera index (A - laser, default 0)
+--right INDEX         Right camera index (B - UV, default 1)
+--rows ROWS           Board rows (default 6)
+--cols COLUMNS        Board columns (default 9)
+--square-size SIZE    Square size in mm (default 25.0)
+--images NUMBER       Number of pairs to capture (default 15)
+--pattern-type TYPE   Pattern type: chessboard, circles, charuco
+--no-auto-capture     Disable automatic capture and use space bar
+--fps FPS             Target FPS for cameras
+--aruco-dict DICTIONARY  ArUco dictionary for ChArUco (use 'auto' for automatic detection)
+--uv-brightness VALUE Brightness for UV camera
+--uv-contrast VALUE   Contrast for UV camera
 ```
-
-### Controles durante la calibración
-
-- **Barra espaciadora**: Capturar imagen (en modo manual)
-- **q**: Salir
-- **+**: Aumentar brillo de la cámara UV
-- **-**: Disminuir brillo de la cámara UV
-- **c**: Aumentar contraste de la cámara UV
-- **x**: Disminuir contraste de la cámara UV
-
-## Salida
-
-El programa genera dos archivos de calibración:
-- `stereo_calibration.txt`: Resultados técnicos de la calibración
-- `stereo_calibration_seal.txt`: Archivo de calibración compatible con SEAL
-
-## Notas
-
-- Asegúrate de tener permisos de acceso a la cámara en tu sistema
-- Para macOS, otorga permisos de cámara a Terminal/Python en Preferencias del Sistema
 
 ---
 
-### Docs
+## Controls During Calibration
+
+- **Space bar**: Capture image (in manual mode)
+- **q**: Exit
+- **+**: Increase brightness of UV camera
+- **-**: Decrease brightness of UV camera
+- **c**: Increase contrast of UV camera
+- **x**: Decrease contrast of UV camera
+
+---
+
+## Output
+
+The program generates two calibration files:
+- `stereo_calibration.txt`: Technical calibration results
+- `stereo_calibration_seal.txt`: SEAL-compatible calibration file
+
+---
+
+## Notes
+
+- Make sure you have camera access permissions on your system
+- For macOS, grant camera permissions to Terminal/Python in System Preferences
+
+---
+
+## Documentation
 
 * https://developer.mamezou-tech.com/en/robotics/vision/calibration-pattern/
 * https://github.com/chandravaran/Stereo_camera_3D_map_generation
