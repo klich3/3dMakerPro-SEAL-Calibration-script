@@ -52,11 +52,6 @@ The following attempts were made, without success:
 
 Frustrated by the lack of a solution (even with a warranty), I developed this **proprietary calibration tool** based on **OpenCV** to restore functionality and better understand the device.
 
-> [!NOTE]  
-> They don't really provide technical support. I don't know the rate of complaints from users who can't scan. It's been two weeks and I still don't have a solution, and the technicians aren't doing anything about it.
-> I think releasing a tool that can calibrate would alleviate the situation, so I've decided to release the tool so that users can do it themselves.
-
-
 
 ### Problem:
 <!-- Si el video no se carga, puedes verlo directamente en: https://github.com/klich3/3dMakerPro-SEAL-Calibration-script/blob/main/Content/Problem/problem_no_see_nothing.mp4 -->
