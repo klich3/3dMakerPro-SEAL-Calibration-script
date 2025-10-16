@@ -59,10 +59,10 @@ Frustrated by the lack of a solution (even with a warranty), I developed this **
 
 
 ### Problem:
-<video src="./Content/Problem/problem_no_see_nothing.mp4" controls preload height="460"></video>
+<video src="Content/Problem/problem_no_see_nothing.mp4" controls preload height="460"></video>
 
 ### Solution after calibration:
-<video src="./Content/After_calibration/scan_point_increse.mp4" controls preload height="460"></video>
+<video src="Content/After_calibration/scan_point_increse.mp4" controls preload height="460"></video>
 
 ---
 
