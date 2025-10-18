@@ -437,7 +437,9 @@ def save_calibration_results(img_size, K_right, dist_right, K_left, dist_left, R
         print(f"[ERROR] Guardar resultados: {str(e)}")
 
 
-def save_seal_calibration_file(img_size, K_left, dist_left, K_right, dist_right, template_file, output_file, dev_id=None):
+def save_seal_calibration_file(img_size, K_left, dist_left, K_right, dist_right, R, T, 
+                              template_file, output_file, dev_id=None, 
+                              square_size_mm=25.0, rows=6, cols=9):
     """Guarda resultados de calibración en formato SEAL compatible"""
     try:
         # Importar las funciones necesarias de seal_calib_writer
@@ -456,6 +458,46 @@ def save_seal_calibration_file(img_size, K_left, dist_left, K_right, dist_right,
         p1 = float(dist_coeffs[2]) if len(dist_coeffs) > 2 else 0.0
         p2 = float(dist_coeffs[3]) if len(dist_coeffs) > 3 else 0.0
         k3 = float(dist_coeffs[4]) if len(dist_coeffs) > 4 else 0.0
+        
+        # Calcular tamaño físico del chessboard en mm
+        # (cols-1) * square_size porque hay (cols-1) cuadrados en horizontal
+        # (rows-1) * square_size porque hay (rows-1) cuadrados en vertical
+        board_width_mm = (cols - 1) * square_size_mm
+        board_height_mm = (rows - 1) * square_size_mm
+        
+        # Calcular corrección angular/tilt entre cámaras desde la matriz de rotación
+        # Convertir matriz de rotación a ángulos de Euler (en grados)
+        # R es la rotación de la cámara derecha respecto a la izquierda
+        import math
+        
+        # Extraer ángulos de Euler de la matriz de rotación (en grados)
+        # Usando convención XYZ (pitch, yaw, roll)
+        sy = math.sqrt(R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0])
+        
+        singular = sy < 1e-6
+        
+        if not singular:
+            pitch = math.atan2(R[2, 1], R[2, 2])  # Rotación alrededor del eje X
+            yaw = math.atan2(-R[2, 0], sy)        # Rotación alrededor del eje Y
+            roll = math.atan2(R[1, 0], R[0, 0])   # Rotación alrededor del eje Z
+        else:
+            pitch = math.atan2(-R[1, 2], R[1, 1])
+            yaw = math.atan2(-R[2, 0], sy)
+            roll = 0
+        
+        # Convertir de radianes a grados
+        pitch_deg = math.degrees(pitch)
+        yaw_deg = math.degrees(yaw)
+        roll_deg = math.degrees(roll)
+        
+        # Para el formato SEAL, usamos los ángulos más significativos
+        # Típicamente pitch y yaw para corrección angular y tilt
+        angular_correction = int(round(yaw_deg))    # Corrección angular horizontal
+        tilt_correction = int(round(pitch_deg))     # Corrección de inclinación vertical
+        
+        print(f"[INFO] Tamaño físico del patrón: {board_width_mm:.1f} x {board_height_mm:.1f} mm")
+        print(f"[INFO] Corrección angular/tilt entre cámaras: {angular_correction}° {tilt_correction}°")
+        print(f"[INFO] Ángulos de rotación detallados - Pitch: {pitch_deg:.2f}°, Yaw: {yaw_deg:.2f}°, Roll: {roll_deg:.2f}°")
         
         # Forzar resolución 1280x720
         override_res = (1280, 720)
@@ -516,6 +558,384 @@ def combine_frames(frame_left, frame_right):
     # Combinar horizontalmente
     combined_frame = np.hstack((frame_left, frame_right))
     return combined_frame
+
+
+def calculate_reprojection_errors(objpoints, imgpoints_left, imgpoints_right, 
+                                   K_left, dist_left, K_right, dist_right, R, T):
+    """Calcula errores de reproyección para cada imagen"""
+    errors_left = []
+    errors_right = []
+    
+    rvec, _ = cv2.Rodrigues(R)
+    
+    for i, objp in enumerate(objpoints):
+        # Proyectar puntos 3D a 2D para cámara izquierda
+        imgpoints_left_proj, _ = cv2.projectPoints(
+            objp, np.zeros((3,1)), np.zeros((3,1)), K_left, dist_left)
+        error_left = cv2.norm(imgpoints_left[i], imgpoints_left_proj, 
+                             cv2.NORM_L2) / len(imgpoints_left_proj)
+        errors_left.append(error_left)
+        
+        # Para cámara derecha, usar R y T
+        imgpoints_right_proj, _ = cv2.projectPoints(
+            objp, rvec, T, K_right, dist_right)
+        error_right = cv2.norm(imgpoints_right[i], imgpoints_right_proj, 
+                              cv2.NORM_L2) / len(imgpoints_right_proj)
+        errors_right.append(error_right)
+    
+    return errors_left, errors_right
+
+
+def validate_calibration(ret, F, img_size, errors_left, errors_right):
+    """Valida la calidad de la calibración"""
+    print(f"\n[VALIDACIÓN DE CALIBRACIÓN]")
+    
+    # 1. Error RMS
+    if ret < 0.5:
+        print(f"✓ Error RMS excelente: {ret:.4f} (< 0.5)")
+    elif ret < 1.0:
+        print(f"⚠ Error RMS aceptable: {ret:.4f} (0.5-1.0)")
+    else:
+        print(f"✗ Error RMS alto: {ret:.4f} (> 1.0) - Recalibrar recomendado")
+    
+    # 2. Errores de reproyección
+    print(f"\n[ERRORES DE REPROYECCIÓN]")
+    print(f"Error medio izquierda: {np.mean(errors_left):.4f} píxeles")
+    print(f"Error medio derecha: {np.mean(errors_right):.4f} píxeles")
+    print(f"Error máximo izquierda: {np.max(errors_left):.4f} píxeles")
+    print(f"Error máximo derecha: {np.max(errors_right):.4f} píxeles")
+    
+    # Detectar outliers (errores > 1.0 píxel)
+    outliers_left = [i for i, e in enumerate(errors_left) if e > 1.0]
+    outliers_right = [i for i, e in enumerate(errors_right) if e > 1.0]
+    
+    if outliers_left or outliers_right:
+        print(f"\n[WARNING] Outliers detectados:")
+        if outliers_left:
+            print(f"  Izquierda: imágenes {outliers_left}")
+        if outliers_right:
+            print(f"  Derecha: imágenes {outliers_right}")
+        print(f"  Considera eliminar estas imágenes y recalibrar")
+    
+    # 3. Matriz fundamental
+    if F is not None:
+        U, S, Vt = np.linalg.svd(F)
+        rank = np.sum(S > 1e-7)
+        if rank == 2:
+            print(f"\n✓ Matriz fundamental válida (rango = 2)")
+        else:
+            print(f"\n✗ Matriz fundamental inválida (rango = {rank})")
+    
+    # 4. Verificar resolución
+    if img_size[0] != 1280 or img_size[1] != 720:
+        print(f"\n⚠ Resolución {img_size} difiere de SEAL (1280x720)")
+        print(f"  Las imágenes serán redimensionadas automáticamente")
+
+
+def print_calibration_summary(K_left, K_right, dist_left, dist_right, R, T, ret, img_size):
+    """Imprime resumen detallado de calibración"""
+    print("\n" + "="*60)
+    print("RESUMEN DE CALIBRACIÓN ESTÉREO")
+    print("="*60)
+    
+    print(f"\n📐 RESOLUCIÓN: {img_size[0]}x{img_size[1]}")
+    print(f"📊 ERROR RMS: {ret:.4f} píxeles")
+    
+    print(f"\n🎥 CÁMARA IZQUIERDA (Laser - A):")
+    print(f"   Focal: fx={K_left[0,0]:.2f}, fy={K_left[1,1]:.2f}")
+    print(f"   Centro: cx={K_left[0,2]:.2f}, cy={K_left[1,2]:.2f}")
+    print(f"   Distorsión: k1={dist_left[0,0]:.4f}, k2={dist_left[0,1]:.4f}")
+    
+    print(f"\n🎥 CÁMARA DERECHA (UV - B):")
+    print(f"   Focal: fx={K_right[0,0]:.2f}, fy={K_right[1,1]:.2f}")
+    print(f"   Centro: cx={K_right[0,2]:.2f}, cy={K_right[1,2]:.2f}")
+    print(f"   Distorsión: k1={dist_right[0,0]:.4f}, k2={dist_right[0,1]:.4f}")
+    
+    print(f"\n🔄 TRANSFORMACIÓN ESTÉREO:")
+    baseline = np.linalg.norm(T)
+    print(f"   Baseline: {baseline:.2f} mm")
+    print(f"   Traslación: X={T[0,0]:.2f}, Y={T[1,0]:.2f}, Z={T[2,0]:.2f} mm")
+    
+    # Calcular ángulos de rotación
+    rvec, _ = cv2.Rodrigues(R)
+    angles = np.degrees(rvec.flatten())
+    print(f"   Rotación: X={angles[0]:.2f}°, Y={angles[1]:.2f}°, Z={angles[2]:.2f}°")
+    
+    print("\n" + "="*60)
+
+
+def process_existing_images(images_dir, checkerboard_rows, checkerboard_cols, 
+                           square_size_mm, pattern_type="chessboard"):
+    """Procesa imágenes existentes para calibración"""
+    import glob
+    
+    print(f"[INFO] Procesando imágenes desde: {images_dir}")
+    
+    # Buscar pares de imágenes (left/right) con diferentes formatos
+    left_patterns = [
+        os.path.join(images_dir, "left_*.jpg"),
+        os.path.join(images_dir, "left_*.png"),
+        os.path.join(images_dir, "*_left.jpg"),
+        os.path.join(images_dir, "*_left.png")
+    ]
+    
+    right_patterns = [
+        os.path.join(images_dir, "right_*.jpg"),
+        os.path.join(images_dir, "right_*.png"),
+        os.path.join(images_dir, "*_right.jpg"),
+        os.path.join(images_dir, "*_right.png")
+    ]
+    
+    left_images = []
+    right_images = []
+    
+    for pattern in left_patterns:
+        left_images = sorted(glob.glob(pattern))
+        if left_images:
+            break
+    
+    for pattern in right_patterns:
+        right_images = sorted(glob.glob(pattern))
+        if right_images:
+            break
+    
+    if len(left_images) == 0 or len(right_images) == 0:
+        raise RuntimeError(f"No se encontraron imágenes en {images_dir}")
+    
+    if len(left_images) != len(right_images):
+        raise RuntimeError(f"Número diferente de imágenes izq/der: {len(left_images)} vs {len(right_images)}")
+    
+    print(f"[INFO] Encontrados {len(left_images)} pares de imágenes")
+    
+    # Preparar puntos del patrón
+    objp = np.zeros((checkerboard_rows * checkerboard_cols, 3), np.float32)
+    objp[:, :2] = np.mgrid[0:checkerboard_cols, 0:checkerboard_rows].T.reshape(-1, 2)
+    objp *= square_size_mm
+    
+    objpoints = []
+    imgpoints_left = []
+    imgpoints_right = []
+    
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+    img_size = None
+    
+    for i, (left_path, right_path) in enumerate(zip(left_images, right_images)):
+        print(f"[INFO] Procesando par {i+1}/{len(left_images)}...")
+        
+        img_left = cv2.imread(left_path)
+        img_right = cv2.imread(right_path)
+        
+        if img_left is None or img_right is None:
+            print(f"[WARNING] No se pudo leer par {i+1}, saltando...")
+            continue
+        
+        if img_size is None:
+            img_size = (img_left.shape[1], img_left.shape[0])
+        
+        gray_left = cv2.cvtColor(img_left, cv2.COLOR_BGR2GRAY)
+        gray_right = cv2.cvtColor(img_right, cv2.COLOR_BGR2GRAY)
+        
+        # Detectar patrón
+        if pattern_type == "chessboard":
+            ret_left, corners_left = cv2.findChessboardCorners(gray_left, (checkerboard_cols, checkerboard_rows), None)
+            ret_right, corners_right = cv2.findChessboardCorners(gray_right, (checkerboard_cols, checkerboard_rows), None)
+        elif pattern_type == "circles":
+            ret_left, corners_left = cv2.findCirclesGrid(gray_left, (checkerboard_cols, checkerboard_rows), None, cv2.CALIB_CB_ASYMMETRIC_GRID)
+            ret_right, corners_right = cv2.findCirclesGrid(gray_right, (checkerboard_cols, checkerboard_rows), None, cv2.CALIB_CB_ASYMMETRIC_GRID)
+        else:
+            print(f"[WARNING] Tipo de patrón {pattern_type} no soportado para procesamiento de imágenes")
+            continue
+        
+        if ret_left and ret_right:
+            # Refinar esquinas para chessboard
+            if pattern_type == "chessboard":
+                corners_left = cv2.cornerSubPix(gray_left, corners_left, (11, 11), (-1, -1), criteria)
+                corners_right = cv2.cornerSubPix(gray_right, corners_right, (11, 11), (-1, -1), criteria)
+            
+            objpoints.append(objp.copy())
+            imgpoints_left.append(corners_left)
+            imgpoints_right.append(corners_right)
+            print(f"[OK] Par {i+1} procesado correctamente")
+        else:
+            print(f"[WARNING] No se detectó patrón en par {i+1}")
+    
+    if len(objpoints) < 3:
+        raise RuntimeError(f"Insuficientes pares válidos: {len(objpoints)}")
+    
+    print(f"[INFO] Calibrando con {len(objpoints)} pares válidos...")
+    
+    # Calibración
+    ret_left, K_left, dist_left, _, _ = cv2.calibrateCamera(
+        objpoints, imgpoints_left, img_size, None, None)
+    ret_right, K_right, dist_right, _, _ = cv2.calibrateCamera(
+        objpoints, imgpoints_right, img_size, None, None)
+    
+    if not ret_left or not ret_right:
+        raise RuntimeError("Error en calibración individual")
+    
+    print("[INFO] Calibración estéreo...")
+    # Usar flags optimizados
+    flags = (cv2.CALIB_FIX_INTRINSIC |  # Usar intrínsecos previamente calibrados
+             cv2.CALIB_RATIONAL_MODEL)   # Modelo de distorsión más preciso
+    
+    ret, K_right, dist_right, K_left, dist_left, R, T, E, F = cv2.stereoCalibrate(
+        objpoints, imgpoints_right, imgpoints_left,
+        K_right, dist_right, K_left, dist_left,
+        img_size, criteria=criteria, flags=flags)
+    
+    if not ret:
+        raise RuntimeError("Error en calibración estéreo")
+    
+    # Calcular errores de reproyección
+    errors_left, errors_right = calculate_reprojection_errors(
+        objpoints, imgpoints_left, imgpoints_right,
+        K_left, dist_left, K_right, dist_right, R, T)
+    
+    # Validar calibración
+    validate_calibration(ret, F, img_size, errors_left, errors_right)
+    
+    # Resumen detallado
+    print_calibration_summary(K_left, K_right, dist_left, dist_right, R, T, ret, img_size)
+    
+    print("[INFO] Calibración completada")
+    return img_size, K_right, dist_right, K_left, dist_left, R, T
+
+
+def process_existing_images(images_dir, checkerboard_rows, checkerboard_cols, 
+                           square_size_mm, pattern_type="chessboard"):
+    """Procesa imágenes existentes para calibración"""
+    import glob
+    
+    print(f"[INFO] Procesando imágenes desde: {images_dir}")
+    
+    # Buscar pares de imágenes (left/right) con diferentes formatos
+    left_patterns = [
+        os.path.join(images_dir, "left_*.jpg"),
+        os.path.join(images_dir, "left_*.png"),
+        os.path.join(images_dir, "*_left.jpg"),
+        os.path.join(images_dir, "*_left.png")
+    ]
+    
+    right_patterns = [
+        os.path.join(images_dir, "right_*.jpg"),
+        os.path.join(images_dir, "right_*.png"),
+        os.path.join(images_dir, "*_right.jpg"),
+        os.path.join(images_dir, "*_right.png")
+    ]
+    
+    left_images = []
+    right_images = []
+    
+    for pattern in left_patterns:
+        left_images = sorted(glob.glob(pattern))
+        if left_images:
+            break
+    
+    for pattern in right_patterns:
+        right_images = sorted(glob.glob(pattern))
+        if right_images:
+            break
+    
+    if len(left_images) == 0 or len(right_images) == 0:
+        raise RuntimeError(f"No se encontraron imágenes en {images_dir}")
+    
+    if len(left_images) != len(right_images):
+        raise RuntimeError(f"Número diferente de imágenes izq/der: {len(left_images)} vs {len(right_images)}")
+    
+    print(f"[INFO] Encontrados {len(left_images)} pares de imágenes")
+    
+    # Preparar puntos del patrón
+    objp = np.zeros((checkerboard_rows * checkerboard_cols, 3), np.float32)
+    objp[:, :2] = np.mgrid[0:checkerboard_cols, 0:checkerboard_rows].T.reshape(-1, 2)
+    objp *= square_size_mm
+    
+    objpoints = []
+    imgpoints_left = []
+    imgpoints_right = []
+    
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+    img_size = None
+    
+    for i, (left_path, right_path) in enumerate(zip(left_images, right_images)):
+        print(f"[INFO] Procesando par {i+1}/{len(left_images)}...")
+        
+        img_left = cv2.imread(left_path)
+        img_right = cv2.imread(right_path)
+        
+        if img_left is None or img_right is None:
+            print(f"[WARNING] No se pudo leer par {i+1}, saltando...")
+            continue
+        
+        if img_size is None:
+            img_size = (img_left.shape[1], img_left.shape[0])
+        
+        gray_left = cv2.cvtColor(img_left, cv2.COLOR_BGR2GRAY)
+        gray_right = cv2.cvtColor(img_right, cv2.COLOR_BGR2GRAY)
+        
+        # Detectar patrón
+        if pattern_type == "chessboard":
+            ret_left, corners_left = cv2.findChessboardCorners(gray_left, (checkerboard_cols, checkerboard_rows), None)
+            ret_right, corners_right = cv2.findChessboardCorners(gray_right, (checkerboard_cols, checkerboard_rows), None)
+        elif pattern_type == "circles":
+            ret_left, corners_left = cv2.findCirclesGrid(gray_left, (checkerboard_cols, checkerboard_rows), None, cv2.CALIB_CB_ASYMMETRIC_GRID)
+            ret_right, corners_right = cv2.findCirclesGrid(gray_right, (checkerboard_cols, checkerboard_rows), None, cv2.CALIB_CB_ASYMMETRIC_GRID)
+        else:
+            print(f"[WARNING] Tipo de patrón {pattern_type} no soportado para procesamiento de imágenes")
+            continue
+        
+        if ret_left and ret_right:
+            # Refinar esquinas para chessboard
+            if pattern_type == "chessboard":
+                corners_left = cv2.cornerSubPix(gray_left, corners_left, (11, 11), (-1, -1), criteria)
+                corners_right = cv2.cornerSubPix(gray_right, corners_right, (11, 11), (-1, -1), criteria)
+            
+            objpoints.append(objp.copy())
+            imgpoints_left.append(corners_left)
+            imgpoints_right.append(corners_right)
+            print(f"[OK] Par {i+1} procesado correctamente")
+        else:
+            print(f"[WARNING] No se detectó patrón en par {i+1}")
+    
+    if len(objpoints) < 3:
+        raise RuntimeError(f"Insuficientes pares válidos: {len(objpoints)}")
+    
+    print(f"[INFO] Calibrando con {len(objpoints)} pares válidos...")
+    
+    # Calibración
+    ret_left, K_left, dist_left, _, _ = cv2.calibrateCamera(
+        objpoints, imgpoints_left, img_size, None, None)
+    ret_right, K_right, dist_right, _, _ = cv2.calibrateCamera(
+        objpoints, imgpoints_right, img_size, None, None)
+    
+    if not ret_left or not ret_right:
+        raise RuntimeError("Error en calibración individual")
+    
+    print("[INFO] Calibración estéreo...")
+    # Usar flags optimizados
+    flags = (cv2.CALIB_FIX_INTRINSIC |  # Usar intrínsecos previamente calibrados
+             cv2.CALIB_RATIONAL_MODEL)   # Modelo de distorsión más preciso
+    
+    ret, K_right, dist_right, K_left, dist_left, R, T, E, F = cv2.stereoCalibrate(
+        objpoints, imgpoints_right, imgpoints_left,
+        K_right, dist_right, K_left, dist_left,
+        img_size, criteria=criteria, flags=flags)
+    
+    if not ret:
+        raise RuntimeError("Error en calibración estéreo")
+    
+    # Calcular errores de reproyección
+    errors_left, errors_right = calculate_reprojection_errors(
+        objpoints, imgpoints_left, imgpoints_right,
+        K_left, dist_left, K_right, dist_right, R, T)
+    
+    # Validar calibración
+    validate_calibration(ret, F, img_size, errors_left, errors_right)
+    
+    # Resumen detallado
+    print_calibration_summary(K_left, K_right, dist_left, dist_right, R, T, ret, img_size)
+    
+    print("[INFO] Calibración completada")
+    return img_size, K_right, dist_right, K_left, dist_left, R, T
 
 
 def calibrate_stereo_cameras(camera_left_index, camera_right_index, 
@@ -583,20 +1003,6 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
             print("[INFO] Intentando reiniciar cámara derecha con enfoque más robusto...")
             right_stream = CameraStream(camera_right_index, "UV (B)")
             right_success = right_stream.start(brightness=target_brightness, contrast=target_contrast)
-            
-            if not right_success or not right_stream.is_initialized():
-                raise RuntimeError(f"No se pudo iniciar cámara derecha (B - UV) {camera_right_index}")
-        
-        if not right_success or not right_stream.is_initialized():
-            print(f"[ERROR] No se pudo iniciar cámara derecha (B - UV) {camera_right_index}")
-            # Mostrar información adicional de error
-            if hasattr(right_stream, 'last_error') and right_stream.last_error:
-                print(f"[ERROR] Detalles: {right_stream.last_error}")
-            print(f"[ERROR] Posible solución: Otorga permisos de cámara a Terminal/Python en Preferencias del Sistema")
-            # Intentar reiniciar la cámara con un enfoque más robusto
-            print("[INFO] Intentando reiniciar cámara derecha con enfoque más robusto...")
-            right_stream = CameraStream(camera_right_index, "UV (B)")
-            right_success = right_stream.start()
             
             if not right_success or not right_stream.is_initialized():
                 raise RuntimeError(f"No se pudo iniciar cámara derecha (B - UV) {camera_right_index}")
@@ -1417,13 +1823,28 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
                 raise RuntimeError("Error en calibración individual")
                 
             print("[INFO] Calibración estéreo...")
+            # Usar flags optimizados
+            flags = (cv2.CALIB_FIX_INTRINSIC |  # Usar intrínsecos previamente calibrados
+                     cv2.CALIB_RATIONAL_MODEL)   # Modelo de distorsión más preciso
+            
             ret, K_right, dist_right, K_left, dist_left, R, T, E, F = cv2.stereoCalibrate(
                 objpoints, imgpoints_right, imgpoints_left,
                 K_right, dist_right, K_left, dist_left,
-                img_size, criteria=criteria)
+                img_size, criteria=criteria, flags=flags)
                 
             if not ret:
                 raise RuntimeError("Error en calibración estéreo")
+                
+            # Calcular errores de reproyección
+            errors_left, errors_right = calculate_reprojection_errors(
+                objpoints, imgpoints_left, imgpoints_right,
+                K_left, dist_left, K_right, dist_right, R, T)
+            
+            # Validar calibración
+            validate_calibration(ret, F, img_size, errors_left, errors_right)
+            
+            # Resumen detallado
+            print_calibration_summary(K_left, K_right, dist_left, dist_right, R, T, ret, img_size)
                 
             print("[INFO] Calibración completada")
             return img_size, K_right, dist_right, K_left, dist_left, R, T
@@ -1479,6 +1900,8 @@ def main():
                        help="Diccionario ArUco para detección ChArUco (usar 'auto' para detección automática)")
     parser.add_argument("--no-auto-capture", action="store_true", 
                        help="Deshabilitar captura automática y usar barra espaciadora para capturar")
+    parser.add_argument("--from-images", type=str, default=None, 
+                       help="Procesar imágenes existentes desde directorio (ej: calib_imgs)")
     # Se elimina el argumento de resolución ya que se usará la resolución máxima de la cámara
     
     args = parser.parse_args()
@@ -1492,29 +1915,41 @@ def main():
         return 0
     
     try:
-        print(f"[INFO] Calibración estéreo:")
-        print(f"  Cámara A (laser) = izquierda = índice {args.left}")
-        print(f"  Cámara B (UV) = derecha = índice {args.right}")
-        print(f"  Tipo de patrón: {args.pattern_type}")
-        print(f"  FPS objetivo: {args.fps if args.fps else 'Usar FPS nativo'}")
-        if args.pattern_type == "charuco":
-            print(f"  Diccionario ArUco: {args.aruco_dict}")
-        print(f"  Captura automática: {'No' if args.no_auto_capture else 'Sí'}")
-        print(f"[INFO] Si ves el error 'not authorized to capture video', otorga permisos de cámara a Terminal/Python")
-        
-        img_size, K_right, dist_right, K_left, dist_left, R, T = calibrate_stereo_cameras(
-            args.left, args.right, args.rows, args.cols, args.square_size, args.images, 
-            pattern_type=args.pattern_type, uv_brightness=args.uv_brightness, uv_contrast=args.uv_contrast,
-            resolution=None, target_fps=args.fps, aruco_dict_name=args.aruco_dict,
-            auto_capture=not args.no_auto_capture)  # Usar captura automática o manual
+        # Modo procesamiento de imágenes existentes
+        if args.from_images:
+            print(f"[INFO] Modo: Procesamiento de imágenes existentes")
+            print(f"  Directorio: {args.from_images}")
+            print(f"  Tipo de patrón: {args.pattern_type}")
+            
+            img_size, K_right, dist_right, K_left, dist_left, R, T = process_existing_images(
+                args.from_images, args.rows, args.cols, args.square_size, 
+                pattern_type=args.pattern_type)
+        else:
+            # Modo calibración en vivo
+            print(f"[INFO] Calibración estéreo:")
+            print(f"  Cámara A (laser) = izquierda = índice {args.left}")
+            print(f"  Cámara B (UV) = derecha = índice {args.right}")
+            print(f"  Tipo de patrón: {args.pattern_type}")
+            print(f"  FPS objetivo: {args.fps if args.fps else 'Usar FPS nativo'}")
+            if args.pattern_type == "charuco":
+                print(f"  Diccionario ArUco: {args.aruco_dict}")
+            print(f"  Captura automática: {'No' if args.no_auto_capture else 'Sí'}")
+            print(f"[INFO] Si ves el error 'not authorized to capture video', otorga permisos de cámara a Terminal/Python")
+            
+            img_size, K_right, dist_right, K_left, dist_left, R, T = calibrate_stereo_cameras(
+                args.left, args.right, args.rows, args.cols, args.square_size, args.images, 
+                pattern_type=args.pattern_type, uv_brightness=args.uv_brightness, uv_contrast=args.uv_contrast,
+                resolution=None, target_fps=args.fps, aruco_dict_name=args.aruco_dict,
+                auto_capture=not args.no_auto_capture)
         
         # Guardar resultados en formato técnico
         save_calibration_results(img_size, K_right, dist_right, K_left, dist_left, R, T, args.output)
         
         # Guardar resultados en formato SEAL con resolución fija 1280x720
         seal_output_file = args.output.replace(".txt", "_seal.txt")
-        save_seal_calibration_file(img_size, K_left, dist_left, K_right, dist_right, 
-                                 args.template, seal_output_file, args.dev_id)
+        save_seal_calibration_file(img_size, K_left, dist_left, K_right, dist_right, R, T,
+                                 args.template, seal_output_file, args.dev_id,
+                                 square_size_mm=args.square_size, rows=args.rows, cols=args.cols)
         
         print("\n[RESULTADOS]")
         print(f"Resolución: {img_size}")

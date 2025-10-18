@@ -52,6 +52,11 @@ The following attempts were made, without success:
 
 Frustrated by the lack of a solution (even with a warranty), I developed this **proprietary calibration tool** based on **OpenCV** to restore functionality and better understand the device.
 
+> [!NOTE]  
+> They don't really provide technical support. I don't know the rate of complaints from users who can't scan. It's been two weeks and I still don't have a solution, and the technicians aren't doing anything about it.
+> I think releasing a tool that can calibrate would alleviate the situation, so I've decided to release the tool so that users can do it themselves.
+
+
 
 ### Problem:
 <!-- Si el video no se carga, puedes verlo directamente en: https://github.com/klich3/3dMakerPro-SEAL-Calibration-script/blob/main/Content/Problem/problem_no_see_nothing.mp4 -->
@@ -113,7 +118,10 @@ pip install -r requirements.txt
 
 The command I used for calibration is:
 ```bash
-python stereo_calibration.py --rows 6 --cols 9 --square-size 3 --images 15 --output stereo_calibration.txt --template calibJMS1006207.txt --dev-id JMS1006207 --no-auto-capture
+python stereo_calibration.py --rows 6 --cols 9 --square-size 3.00 --images 15 --output stereo_calibration.txt --template calibJMS1006207.txt --dev-id JMS1006207 --no-auto-capture
+
+python stereo_calibration.py --rows 6 --cols 9 --square-size 7.00 --images 15 --output stereo_calibration.txt --template calibJMS1006207.txt --dev-id JMS1006207 --no-auto-capture
+python stereo_calibration.py --from-images ./calib_imgs --rows 6 --cols 9 --square-size 7.00 --output stereo_calibration.txt --template calibJMS1006207.txt --dev-id JMS1006207 
 ```
 
 There are more settings, so you can review the [Available Options](#available-options) section.
@@ -157,6 +165,11 @@ If not, in my profile there is a repository for a tool that can grant authorizat
 ### Basic calibration (dashboard)
 ```bash
 python stereo_calibration.py --left 0 --right 1 --rows 6 --cols 9 --square-size 25.0
+```
+
+### Process existing images
+```bash
+python stereo_calibration.py --from-images calib_imgs --rows 6 --cols 9 --square-size 3 --output stereo_calibration.txt --template calibJMS1006207.txt --dev-id JMS1006207
 ```
 
 ### Asymmetric circles + UV adjustment
@@ -293,8 +306,15 @@ Stereo calibration with two cameras:
 python stereo_calibration.py
 
 # Calibration with specific parameters
-python stereo_calibration.py --left 0 --right 1 --rows 6 --cols 9 --square-size 25.0
-python stereo_calibration.py --rows 6 --cols 9 --square-size 3 --images 15 --output stereo_calibration.txt --template calibJMS1006207.txt --dev-id JMS1006207 --no-auto-capture
+python stereo_calibration.py --left 1 --right 0 --rows 6 --cols 9 --square-size 25.0
+
+#small pattern from pdf
+python stereo_calibration.py --rows 6 --cols 9 --square-size 3.00 --images 15 --output stereo_calibration.txt --template calibJMS1006207.txt --dev-id JMS1006207 --no-auto-capture
+
+#mid pattern form pdf
+python stereo_calibration.py --rows 6 --cols 9 --square-size 7.00 --images 15 --output stereo_calibration.txt --template calibJMS1006207.txt --dev-id JMS1006207 --no-auto-capture
+python stereo_calibration.py --from-images ./calib_imgs --rows 6 --cols 9 --square-size 7.00 --output stereo_calibration.txt --template calibJMS1006207.txt --dev-id JMS1006207 
+
 
 # Use circle pattern
 python stereo_calibration.py --pattern-type circles
@@ -397,6 +417,53 @@ The program generates two calibration files:
 
 - Make sure you have camera access permissions on your system
 - For macOS, grant camera permissions to Terminal/Python in System Preferences
+
+---
+
+## Calibration file
+
+```text
+1280 720  -> Capture resolution (width height in pixels)
+24.000000 15.000000  -> Physical size of the calibration pattern in mm (width height)
+                       Calculated as: (cols-1) * square_size, (rows-1) * square_size
+                       Example: 9 cols, 6 rows, 3mm squares = (9-1)*3=24mm, (6-1)*3=15mm
+162 110   -> Coordinates or displacement (preserved from template)
+4 -80   -> Angular or tilt correction between cameras (in degrees)
+           Calculated from rotation matrix R (stereo calibration):
+           - First value: Yaw angle (horizontal angular correction)
+           - Second value: Pitch angle (vertical tilt correction)
+2564.624023 2563.805908 664.684021 380.992004 -0.242161 0.331902 0.000973 0.001627 -0.865083 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000    -> Camera calibration blocks
+2576.229004 2575.877930 628.784973 400.802002 -0.257220 0.298543 0.000739 -0.000892 -0.669365 -0.006757 0.182739 0.002395 -39.233002 0.034000 13.896000       First 9 values per line: fx, fy, cx, cy, k1, k2, p1, p2, k3
+2800.438721 2477.078857 542.259277 353.046265 -0.220209 -0.295379 -0.000011 -0.000875 4.029662 -0.007206 -0.133619 -0.003511 28.377724 0.011272 1.662601       Remaining values: extrinsic transformation (rotation, translation)
+155
+
+2 -0.007498 24.452629   -> Here you will find the intrinsic and distortion parameters, possibly from several cameras (or projector positions). Each line contains:
+                          fx, fy: focal length in pixels.
+                          cx, cy: coordinates of the principal point (optical center).
+                          k1, k2, p1, p2, k3: radial and tangential distortion coefficients.
+                          Valores siguientes: una transformación extrínseca (rotación, traslación u orientación del patrón)
+
+3 -0.009220 29.683603
+4 -0.009219 34.082027
+5 -0.009201 38.469620
+6 -0.009134 42.820999
+...
+246
+2 1 3 2 4 1   -> These integers are a pattern-projection correspondence mask, probably describing the order in which the projector and camera interpret light patterns or Gray-code sequences in structured calibration.
+4 1 2 1 3 2
+4 1 2 1 3 2
+3 2 4 1 2 1
+1 3 2 4 1 2
+2 4 1 2 1 3
+3 2 4 1 2 1
+2 1 3 2 4 1
+4 1 2 1 3 2
+3 2 4 1 2 1
+2 1 3 2 4 1
+...
+
+***DevID:JMS1006207***CalibrateDate:2024-10-08_11-19-12***Type:Factory-12***SoftVersion:3.0.0.1116
+```
 
 ---
 
