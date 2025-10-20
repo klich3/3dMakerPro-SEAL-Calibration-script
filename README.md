@@ -1,11 +1,5 @@
 # 3DMakerpro Seal Lite Re-calibration
 
-'''
-python stereo_calibration.py --from-images ./calib_imgs --rows 6 --cols 9 --square-size 3 --output stereo_calibration.txt --template calibJMS1006207.txt --dev-id JMS1006207
-'''
-
-
-
 > Tools for **stereo camera calibration** and **3D reconstruction** with laser and UV, developed independently for the **3DMakerPro SEAL Lite** scanner.
 
 - 🔬 **Compatibility**: tested **exclusively with 3DMakerPro SEAL Lite**.
@@ -18,6 +12,11 @@ python stereo_calibration.py --from-images ./calib_imgs --rows 6 --cols 9 --squa
 > - The author **is not responsible** for any damage, loss, or failure resulting from use or misuse.
 > 
 > **Use it at your own risk and discretion.**
+
+---
+
+> [!NOTE]
+> ***Final Module*** `https://github.com/klich3/seal-calibration`
 
 ---
 
