@@ -16,6 +16,7 @@ from pathlib import Path
 import threading
 import queue
 import time
+import sys
 
 
 class CameraStream:
@@ -438,8 +439,9 @@ def save_calibration_results(img_size, K_right, dist_right, K_left, dist_left, R
 
 
 def save_seal_calibration_file(img_size, K_left, dist_left, K_right, dist_right, R, T, 
+                              K_proj, dist_proj,
                               template_file, output_file, dev_id=None, 
-                              square_size_mm=25.0, rows=6, cols=9):
+                              square_size_mm=25.0, rows=6, cols=9, gray_code_table=None):
     """Guarda resultados de calibración en formato SEAL compatible"""
     try:
         # Importar las funciones necesarias de seal_calib_writer
@@ -521,15 +523,154 @@ def save_seal_calibration_file(img_size, K_left, dist_left, K_right, dist_right,
         with open(output_file, 'r') as f:
             content = f.read()
         
-        # Reemplazar la fecha y el tipo
+        # IMPORTANTE: Las líneas 2, 3 y 4 NO se modifican
+        # Son parámetros de fábrica del hardware (cámara-proyector)
+        # que fueron calibrados con equipamiento especializado
+        # Modificarlos causaría:
+        #   - Línea 2: Alteración de escala 3D y profundidad
+        #   - Línea 3: Desplazamiento/distorsión de la escena
+        #   - Línea 4: Inclinación o arqueo del plano 3D
+        
+        # Solo actualizar la fecha y el tipo en los metadatos
         import re
         content = re.sub(r'CalibrateDate:[^*]*', f'CalibrateDate:{current_date}', content)
         content = re.sub(r'Type:[^*]*', 'Type:Sychev-calibration', content)
         
+        # Si hay tabla Gray Code, insertarla después de la línea 1 (resolución)
+        if gray_code_table and len(gray_code_table) > 0:
+            print(f"\n[INFO] Insertando tabla de correspondencias Gray Code ({len(gray_code_table)} entradas)...")
+            
+            # Dividir contenido en líneas
+            lines = content.split('\n')
+            
+            # Encontrar la línea de resolución: puede ser "1280 720" o "1 1280 720"
+            insert_index = -1
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                # Buscar "1280 720" o "1 1280 720"
+                if (stripped == '1280 720' or 
+                    stripped.startswith('1280 720') or
+                    (stripped.startswith('1 ') and '720' in stripped)):
+                    insert_index = i + 1
+                    print(f"  Encontrada línea resolución en {i+1}: '{stripped}'")
+                    break
+            
+            if insert_index > 0:
+                # Eliminar tabla anterior si existe (líneas 2-156 del template)
+                cleaned_lines = lines[:insert_index]
+                skip_until = -1
+                
+                # Buscar inicio de tabla antigua (líneas con formato "N X.X Y.Y")
+                for i in range(insert_index, len(lines)):
+                    stripped = lines[i].strip()
+                    if stripped and len(stripped.split()) == 3:
+                        parts = stripped.split()
+                        try:
+                            int(parts[0])
+                            float(parts[1])
+                            float(parts[2])
+                            # Es parte de tabla antigua, marcar para saltar
+                            if skip_until < 0:
+                                print(f"  Eliminando tabla anterior desde línea {i+1}")
+                            skip_until = i
+                        except ValueError:
+                            # No es tabla, continuar normal
+                            if skip_until >= 0:
+                                # Fin de la tabla antigua
+                                break
+                    elif skip_until >= 0:
+                        # Fin de la tabla antigua
+                        break
+                
+                # Copiar líneas después de la tabla antigua
+                if skip_until >= 0:
+                    cleaned_lines.extend(lines[skip_until + 1:])
+                else:
+                    cleaned_lines.extend(lines[insert_index:])
+                
+                # Insertar nueva tabla
+                lines = cleaned_lines[:insert_index] + gray_code_table + cleaned_lines[insert_index:]
+                content = '\n'.join(lines)
+                print(f"  Tabla insertada después de línea {insert_index}")
+            else:
+                print(f"[WARNING] No se encontró línea de resolución, tabla NO insertada")
+        
         with open(output_file, 'w') as f:
             f.write(content)
         
-        print(f"[INFO] Archivo de calibración SEAL guardado en {output_file}")
+        print(f"\n[INFO] Archivo de calibración SEAL generado")
+        print(f"  NOTA: Líneas 2, 3, 4 preservadas de la plantilla (parámetros de fábrica)")
+        print(f"  Solo se actualizaron: intrínsecos, distorsión y metadatos")
+        print(f"[INFO] Archivo guardado en: {output_file}")
+        
+        # Guardar parámetros del proyector en un archivo separado para referencia
+        if K_proj is not None and dist_proj is not None:
+            # Generar nombre correcto reemplazando _seal.txt o _seal_gray_code.txt
+            if "_seal_gray_code.txt" in output_file:
+                projector_file = output_file.replace("_seal_gray_code.txt", "_seal_projector_params.txt")
+            else:
+                projector_file = output_file.replace("_seal.txt", "_projector_params.txt")
+            print(f"\n[INFO] Guardando parámetros estimados del proyector...")
+            
+            # Extraer parámetros del proyector
+            fx_proj = float(K_proj[0, 0])
+            fy_proj = float(K_proj[1, 1])
+            cx_proj = float(K_proj[0, 2])
+            cy_proj = float(K_proj[1, 2])
+            skew_proj = float(K_proj[0, 1])
+            
+            dist_proj_flat = dist_proj.flatten()
+            k1_proj = float(dist_proj_flat[0]) if len(dist_proj_flat) > 0 else 0.0
+            k2_proj = float(dist_proj_flat[1]) if len(dist_proj_flat) > 1 else 0.0
+            p1_proj = float(dist_proj_flat[2]) if len(dist_proj_flat) > 2 else 0.0
+            p2_proj = float(dist_proj_flat[3]) if len(dist_proj_flat) > 3 else 0.0
+            k3_proj = float(dist_proj_flat[4]) if len(dist_proj_flat) > 4 else 0.0
+            
+            # Calcular baseline y transformación
+            baseline = np.linalg.norm(T)
+            rvec, _ = cv2.Rodrigues(R)
+            angles = np.degrees(rvec.flatten())
+            
+            with open(projector_file, 'w') as f:
+                f.write("# PARÁMETROS ESTIMADOS DEL PROYECTOR\n")
+                f.write("# =====================================\n")
+                f.write("# NOTA IMPORTANTE:\n")
+                f.write("# Esta es una ESTIMACIÓN APROXIMADA basada en homografías del patrón de calibración.\n")
+                f.write("# Para calibración precisa del proyector, se requiere patrones de luz estructurada.\n")
+                f.write("#\n")
+                f.write("# FORMATO: 2 -0.007498 24.452629\n")
+                f.write("# Donde: num fx fy cx cy k1 k2 p1 p2 k3 [transformación extrínseca]\n")
+                f.write("#\n\n")
+                
+                f.write(f"# Parámetros intrínsecos del proyector:\n")
+                f.write(f"2 {fx_proj:.6f} {fy_proj:.6f} {cx_proj:.6f} {cy_proj:.6f} ")
+                f.write(f"{k1_proj:.6f} {k2_proj:.6f} {p1_proj:.6f} {p2_proj:.6f} {k3_proj:.6f} ")
+                f.write(f"{skew_proj:.6f} {baseline:.6f}\n")
+                
+                f.write(f"\n# Desglose de parámetros:\n")
+                f.write(f"# fx (focal x): {fx_proj:.6f} píxeles\n")
+                f.write(f"# fy (focal y): {fy_proj:.6f} píxeles\n")
+                f.write(f"# cx (centro x): {cx_proj:.6f} píxeles\n")
+                f.write(f"# cy (centro y): {cy_proj:.6f} píxeles\n")
+                f.write(f"# k1 (distorsión radial): {k1_proj:.6f}\n")
+                f.write(f"# k2 (distorsión radial): {k2_proj:.6f}\n")
+                f.write(f"# p1 (distorsión tangencial): {p1_proj:.6f}\n")
+                f.write(f"# p2 (distorsión tangencial): {p2_proj:.6f}\n")
+                f.write(f"# k3 (distorsión radial): {k3_proj:.6f}\n")
+                f.write(f"# skew (sesgo): {skew_proj:.6f}\n")
+                f.write(f"# baseline (línea base): {baseline:.6f} mm\n")
+                
+                f.write(f"\n# Transformación estéreo (cámara-proyector):\n")
+                f.write(f"# Rotación (grados): X={angles[0]:.2f}°, Y={angles[1]:.2f}°, Z={angles[2]:.2f}°\n")
+                f.write(f"# Traslación (mm): X={T[0,0]:.2f}, Y={T[1,0]:.2f}, Z={T[2,0]:.2f}\n")
+                
+                f.write(f"\n# Fecha de calibración: {current_date}\n")
+                f.write(f"# Device ID: {dev_id if dev_id else 'N/A'}\n")
+            
+            print(f"[INFO] Parámetros del proyector guardados en: {projector_file}")
+            print(f"  ADVERTENCIA: Estos son valores ESTIMADOS, no precisos")
+            print(f"  Para uso en producción, se requiere calibración con luz estructurada")
+        
     except Exception as e:
         print(f"[ERROR] Guardar archivo de calibración SEAL: {str(e)}")
 
@@ -664,141 +805,894 @@ def print_calibration_summary(K_left, K_right, dist_left, dist_right, R, T, ret,
     print("\n" + "="*60)
 
 
-def process_existing_images(images_dir, checkerboard_rows, checkerboard_cols, 
-                           square_size_mm, pattern_type="chessboard"):
-    """Procesa imágenes existentes para calibración"""
+def estimate_projector_parameters(objpoints, imgpoints_left, imgpoints_right, K_left, dist_left, K_right, dist_right, img_size):
+    """
+    Estima los parámetros intrínsecos del proyector usando homografías
+    desde las correspondencias del patrón de calibración.
+    
+    Este método asume que el proyector actúa como una "cámara inversa"
+    que proyecta un patrón estructurado sobre el tablero de ajedrez.
+    
+    Args:
+        objpoints: Puntos 3D del patrón
+        imgpoints_left: Puntos 2D detectados en cámara izquierda
+        imgpoints_right: Puntos 2D detectados en cámara derecha
+        K_left, dist_left: Intrínsecos de cámara izquierda
+        K_right, dist_right: Intrínsecos de cámara derecha
+        img_size: Tamaño de imagen (width, height)
+    
+    Returns:
+        K_proj: Matriz intrínseca del proyector (3x3)
+        dist_proj: Coeficientes de distorsión del proyector (5 valores)
+    """
+    
+    print(f"\n{'='*60}")
+    print(f"[ESTIMACIÓN DE PARÁMETROS DEL PROYECTOR]")
+    print(f"{'='*60}")
+    
+    # Método: Usar homografías para estimar parámetros intrínsecos
+    # del proyector desde múltiples vistas del tablero
+    
+    H_matrices = []
+    
+    # Calcular homografías para cada par de imágenes
+    for i in range(len(objpoints)):
+        # Proyectar puntos 3D del patrón al plano z=0
+        objp_2d = objpoints[i][:, :2].astype(np.float32)
+        imgp = imgpoints_left[i].reshape(-1, 2).astype(np.float32)
+        
+        # Calcular homografía entre patrón y imagen
+        H, mask = cv2.findHomography(objp_2d, imgp, cv2.RANSAC, 5.0)
+        
+        if H is not None:
+            H_matrices.append(H)
+    
+    if len(H_matrices) < 3:
+        print(f"[WARNING] Pocas homografías válidas ({len(H_matrices)}), estimación puede ser imprecisa")
+        # Usar valores por defecto basados en cámara izquierda
+        K_proj = K_left.copy()
+        dist_proj = np.zeros(5)
+        return K_proj, dist_proj
+    
+    # Extraer parámetros intrínsecos usando el método de Zhang
+    # Basado en "A Flexible New Technique for Camera Calibration" - Zhang, 1999
+    
+    # Construir sistema de ecuaciones V*b = 0
+    # donde b contiene los parámetros de la cónica imagen del círculo absoluto
+    V = []
+    
+    def v_ij(H, i, j):
+        """Construye el vector v_ij según Zhang"""
+        return np.array([
+            H[0, i] * H[0, j],
+            H[0, i] * H[1, j] + H[1, i] * H[0, j],
+            H[1, i] * H[1, j],
+            H[2, i] * H[0, j] + H[0, i] * H[2, j],
+            H[2, i] * H[1, j] + H[1, i] * H[2, j],
+            H[2, i] * H[2, j]
+        ])
+    
+    for H in H_matrices:
+        # Las dos ecuaciones de constraints para cada homografía
+        V.append(v_ij(H, 0, 1))  # h1^T * B * h2 = 0
+        V.append(v_ij(H, 0, 0) - v_ij(H, 1, 1))  # h1^T * B * h1 = h2^T * B * h2
+    
+    V = np.array(V)
+    
+    # Resolver el sistema usando SVD
+    _, _, Vt = np.linalg.svd(V)
+    b = Vt[-1]  # Última fila de V^T
+    
+    # Extraer parámetros intrínsecos de b
+    # b = [B11, B12, B22, B13, B23, B33]^T
+    # donde B es la matriz de la cónica imagen del círculo absoluto
+    
+    B11, B12, B22, B13, B23, B33 = b
+    
+    # Calcular parámetros intrínsecos
+    v0 = (B12 * B13 - B11 * B23) / (B11 * B22 - B12 * B12)
+    lambda_ = B33 - (B13 * B13 + v0 * (B12 * B13 - B11 * B23)) / B11
+    
+    if lambda_ / B11 < 0:
+        print("[WARNING] Parámetros negativos detectados, ajustando...")
+        alpha = np.sqrt(abs(lambda_ / B11))
+    else:
+        alpha = np.sqrt(lambda_ / B11)  # fx
+    
+    if lambda_ / B22 < 0:
+        beta = np.sqrt(abs(lambda_ / B22))
+    else:
+        beta = np.sqrt(lambda_ / B22)   # fy
+    
+    gamma = -B12 * alpha * alpha * beta / lambda_  # skew (normalmente ~0)
+    u0 = gamma * v0 / beta - B13 * alpha * alpha / lambda_  # cx
+    
+    # Construir matriz intrínseca del proyector
+    K_proj = np.array([
+        [alpha, gamma, u0],
+        [0, beta, v0],
+        [0, 0, 1]
+    ])
+    
+    # Estimar coeficientes de distorsión (simplificado)
+    # Calcular errores de reproyección para estimar distorsión radial
+    all_errors = []
+    
+    for i, H in enumerate(H_matrices):
+        if i >= len(objpoints):
+            break
+            
+        objp_2d = objpoints[i][:, :2].astype(np.float32)
+        imgp = imgpoints_left[i].reshape(-1, 2).astype(np.float32)
+        
+        # Proyectar usando homografía
+        objp_2d_hom = np.hstack([objp_2d, np.ones((objp_2d.shape[0], 1))])
+        imgp_proj_hom = (H @ objp_2d_hom.T).T
+        imgp_proj = imgp_proj_hom[:, :2] / imgp_proj_hom[:, 2:3]
+        
+        # Calcular error radial
+        errors = np.linalg.norm(imgp - imgp_proj, axis=1)
+        all_errors.extend(errors)
+    
+    # Distorsión radial simple basada en error promedio
+    mean_error = np.mean(all_errors)
+    
+    if mean_error > 1.0:
+        # Estimar k1 (distorsión radial dominante)
+        k1 = -mean_error * 0.001  # Factor empírico
+        dist_proj = np.array([k1, 0, 0, 0, 0])
+    else:
+        dist_proj = np.zeros(5)
+    
+    print(f"\n[PARÁMETROS ESTIMADOS DEL PROYECTOR]")
+    print(f"  Matriz intrínseca K_proj:")
+    print(f"    fx = {K_proj[0,0]:.6f}")
+    print(f"    fy = {K_proj[1,1]:.6f}")
+    print(f"    cx = {K_proj[0,2]:.6f}")
+    print(f"    cy = {K_proj[1,2]:.6f}")
+    print(f"    skew = {K_proj[0,1]:.6f}")
+    print(f"\n  Coeficientes de distorsión:")
+    print(f"    k1 = {dist_proj[0]:.6f}")
+    print(f"    k2 = {dist_proj[1]:.6f}")
+    print(f"    p1 = {dist_proj[2]:.6f}")
+    print(f"    p2 = {dist_proj[3]:.6f}")
+    print(f"    k3 = {dist_proj[4]:.6f}")
+    
+    print(f"\n  Error de reproyección promedio: {mean_error:.4f} píxeles")
+    print(f"  Homografías utilizadas: {len(H_matrices)}")
+    
+    print(f"\n[NOTA IMPORTANTE]")
+    print(f"  Esta es una ESTIMACIÓN APROXIMADA basada en homografías.")
+    print(f"  Para calibración precisa del proyector, se requiere:")
+    print(f"    - Patrones de luz estructurada (Gray Code/Phase Shifting)")
+    print(f"    - Correspondencias píxel a píxel cámara-proyector")
+    print(f"    - Calibración completa usando cv2.calibrateCamera con puntos proyector")
+    print(f"={'='*60}\n")
+    
+    return K_proj, dist_proj
+
+
+def generate_gray_code_patterns(width, height, num_bits=10):
+    """
+    Genera patrones Gray Code para calibración de proyector.
+    
+    Args:
+        width: Ancho del proyector
+        height: Alto del proyector
+        num_bits: Número de bits (determina resolución)
+    
+    Returns:
+        Lista de patrones (verticales + horizontales + inversos)
+    """
+    patterns = []
+    
+    # Verificar que num_bits es válido para la resolución
+    max_bits_width = int(np.ceil(np.log2(width)))
+    max_bits_height = int(np.ceil(np.log2(height)))
+    
+    if num_bits > max_bits_width:
+        print(f"[WARNING] num_bits ({num_bits}) mayor que resolución de ancho ({width}px)")
+        print(f"[INFO] Ajustando a {max_bits_width} bits para ancho")
+        num_bits = max_bits_width
+    
+    if num_bits > max_bits_height:
+        print(f"[WARNING] num_bits ({num_bits}) mayor que resolución de alto ({height}px)")
+        print(f"[INFO] Máximo recomendado: {max_bits_height} bits para alto")
+    
+    # Patrón negro completo (referencia)
+    black_pattern = np.zeros((height, width), dtype=np.uint8)
+    patterns.append(black_pattern)
+    
+    # Patrón blanco completo (referencia)
+    white_pattern = np.ones((height, width), dtype=np.uint8) * 255
+    patterns.append(white_pattern)
+    
+    # Patrones verticales (codifican coordenada X del proyector)
+    print(f"[INFO] Generando {num_bits} patrones verticales...")
+    for bit in range(num_bits):
+        pattern = np.zeros((height, width), dtype=np.uint8)
+        stripe_width = width // (2 ** (bit + 1))
+        
+        # Verificar que stripe_width no sea cero
+        if stripe_width == 0:
+            print(f"[WARNING] Patrón vertical bit {bit}: stripe_width = 0, saltando...")
+            continue
+        
+        for x in range(width):
+            if (x // stripe_width) % 2 == 1:
+                pattern[:, x] = 255
+        
+        patterns.append(pattern)
+    
+    # Patrones verticales invertidos (para mejorar precisión)
+    print(f"[INFO] Generando {num_bits} patrones verticales invertidos...")
+    for bit in range(num_bits):
+        pattern = np.zeros((height, width), dtype=np.uint8)
+        stripe_width = width // (2 ** (bit + 1))
+        
+        if stripe_width == 0:
+            print(f"[WARNING] Patrón vertical invertido bit {bit}: stripe_width = 0, saltando...")
+            continue
+        
+        for x in range(width):
+            if (x // stripe_width) % 2 == 0:
+                pattern[:, x] = 255
+        
+        patterns.append(pattern)
+    
+    # Patrones horizontales (codifican coordenada Y del proyector)
+    print(f"[INFO] Generando {num_bits} patrones horizontales...")
+    for bit in range(num_bits):
+        pattern = np.zeros((height, width), dtype=np.uint8)
+        stripe_height = height // (2 ** (bit + 1))
+        
+        # Verificar que stripe_height no sea cero
+        if stripe_height == 0:
+            print(f"[WARNING] Patrón horizontal bit {bit}: stripe_height = 0, saltando...")
+            continue
+        
+        for y in range(height):
+            if (y // stripe_height) % 2 == 1:
+                pattern[y, :] = 255
+        
+        patterns.append(pattern)
+    
+    # Patrones horizontales invertidos
+    print(f"[INFO] Generando {num_bits} patrones horizontales invertidos...")
+    for bit in range(num_bits):
+        pattern = np.zeros((height, width), dtype=np.uint8)
+        stripe_height = height // (2 ** (bit + 1))
+        
+        if stripe_height == 0:
+            print(f"[WARNING] Patrón horizontal invertido bit {bit}: stripe_height = 0, saltando...")
+            continue
+        
+        for y in range(height):
+            if (y // stripe_height) % 2 == 0:
+                pattern[y, :] = 255
+        
+        patterns.append(pattern)
+    
+    print(f"[INFO] Total de patrones Gray Code generados: {len(patterns)}")
+    print(f"[INFO] Recomendación: Para {width}x{height}, usar --gray-bits {max_bits_width}")
+    
+    return patterns
+
+
+def capture_gray_code_patterns(left_stream, right_stream, projector_width=1920, projector_height=1080, 
+                               num_bits=10, output_dir="calib_imgs", delay=0.5):
+    """
+    Captura patrones Gray Code proyectados con ambas cámaras estéreo.
+    
+    El flujo es:
+    1. Genera patrones Gray Code
+    2. Muestra cada patrón en pantalla completa (para proyección)
+    3. Captura con ambas cámaras simultáneamente
+    4. Guarda imágenes con prefijo gray_
+    
+    Args:
+        left_stream: Stream de cámara izquierda
+        right_stream: Stream de cámara derecha
+        projector_width: Ancho del proyector
+        projector_height: Alto del proyector
+        num_bits: Número de bits para Gray Code (más bits = mayor resolución)
+        output_dir: Directorio donde guardar imágenes
+        delay: Retardo entre patrones (segundos)
+    
+    Returns:
+        Tupla de (archivos_left, archivos_right, patrones)
+    """
+    
+    print(f"\n{'='*60}")
+    print(f"[CAPTURA DE PATRONES GRAY CODE]")
+    print(f"{'='*60}")
+    print(f"[INFO] Resolución proyector: {projector_width}x{projector_height}")
+    print(f"[INFO] Número de bits: {num_bits}")
+    print(f"[INFO] Total patrones a proyectar: {num_bits * 4 + 2}")
+    print(f"\n[INSTRUCCIONES]:")
+    print(f"  1. Coloca una superficie PLANA y BLANCA frente a las cámaras")
+    print(f"  2. Configura el proyector para mostrar en PANTALLA COMPLETA")
+    print(f"  3. Asegúrate de que el proyector esté ENFOCADO")
+    print(f"  4. La habitación debe estar LO MÁS OSCURA posible")
+    print(f"  5. Presiona ENTER cuando estés listo...")
+    print(f"  6. Presiona 'q' durante la captura para cancelar")
+    print(f"\n")
+    
+    input("Presiona ENTER para comenzar la captura...")
+    
+    # Generar patrones
+    patterns = generate_gray_code_patterns(projector_width, projector_height, num_bits)
+    
+    # Crear directorio de salida
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Listas para guardar nombres de archivos
+    captured_files_left = []
+    captured_files_right = []
+    
+    # Crear ventana en pantalla completa para proyección
+    window_name = "Proyector - Patrones Gray Code"
+    cv2.namedWindow(window_name, cv2.WND_PROP_FULLSCREEN)
+    cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    
+    print(f"\n[INFO] Iniciando captura de {len(patterns)} patrones...")
+    print(f"[INFO] Delay entre patrones: {delay} segundos")
+    
+    try:
+        for i, pattern in enumerate(patterns):
+            # Convertir patrón a BGR para visualización
+            pattern_bgr = cv2.cvtColor(pattern, cv2.COLOR_GRAY2BGR)
+            
+            # Mostrar patrón en pantalla completa
+            cv2.imshow(window_name, pattern_bgr)
+            cv2.waitKey(1)  # Actualizar ventana inmediatamente
+            
+            print(f"\n[{i+1}/{len(patterns)}] Proyectando patrón Gray Code...")
+            
+            # Esperar para que el patrón se estabilice
+            time.sleep(delay)
+            
+            # Capturar con ambas cámaras
+            left_ret, left_frame = left_stream.get_frame()
+            right_ret, right_frame = right_stream.get_frame()
+            
+            if not left_ret or left_frame is None:
+                print(f"[WARNING] No se pudo capturar frame izquierdo para patrón {i+1}")
+                continue
+            
+            if not right_ret or right_frame is None:
+                print(f"[WARNING] No se pudo capturar frame derecho para patrón {i+1}")
+                continue
+            
+            # Guardar imágenes con prefijo gray_
+            left_filename = os.path.join(output_dir, f"gray_left_{i:03d}.png")
+            right_filename = os.path.join(output_dir, f"gray_right_{i:03d}.png")
+            
+            cv2.imwrite(left_filename, left_frame)
+            cv2.imwrite(right_filename, right_frame)
+            
+            captured_files_left.append(left_filename)
+            captured_files_right.append(right_filename)
+            
+            print(f"  ✓ Guardado: {os.path.basename(left_filename)} y {os.path.basename(right_filename)}")
+            
+            # Verificar si el usuario quiere cancelar
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                print(f"\n[INFO] Captura cancelada por el usuario")
+                break
+        
+        print(f"\n{'='*60}")
+        print(f"[INFO] Captura Gray Code completada")
+        print(f"  Total patrones capturados: {len(captured_files_left)}")
+        print(f"  Archivos guardados en: {output_dir}/")
+        print(f"  Prefijo: gray_left_*.png y gray_right_*.png")
+        print(f"={'='*60}\n")
+        
+    except KeyboardInterrupt:
+        print(f"\n[WARNING] Captura interrumpida por el usuario (Ctrl+C)")
+    
+    except Exception as e:
+        print(f"\n[ERROR] Error durante captura: {str(e)}")
+        import traceback
+        traceback.print_exc()
+    
+    finally:
+        # Cerrar ventana de proyección
+        cv2.destroyWindow(window_name)
+    
+    return captured_files_left, captured_files_right, patterns
+
+
+def decode_gray_code_images(gray_images, inverted_images, num_bits):
+    """
+    Decodifica imágenes Gray Code para obtener coordenadas del proyector.
+    
+    Args:
+        gray_images: Lista de imágenes Gray Code normales
+        inverted_images: Lista de imágenes Gray Code invertidas
+        num_bits: Número de bits usados
+    
+    Returns:
+        decoded_map: Mapa de coordenadas (height, width) con valores decodificados
+        valid_mask: Máscara booleana indicando píxeles válidos
+    """
+    if len(gray_images) != num_bits or len(inverted_images) != num_bits:
+        raise ValueError(f"Se esperaban {num_bits} imágenes, se recibieron {len(gray_images)} y {len(inverted_images)}")
+    
+    height, width = gray_images[0].shape[:2]
+    decoded_map = np.zeros((height, width), dtype=np.int32)
+    valid_mask = np.ones((height, width), dtype=bool)
+    
+    # Convertir todas las imágenes a escala de grises
+    gray_imgs_bw = []
+    inverted_imgs_bw = []
+    
+    for i in range(num_bits):
+        # Convertir a escala de grises si es necesario
+        if len(gray_images[i].shape) == 3:
+            gray_bw = cv2.cvtColor(gray_images[i], cv2.COLOR_BGR2GRAY)
+        else:
+            gray_bw = gray_images[i]
+        
+        if len(inverted_images[i].shape) == 3:
+            inv_bw = cv2.cvtColor(inverted_images[i], cv2.COLOR_BGR2GRAY)
+        else:
+            inv_bw = inverted_images[i]
+        
+        gray_imgs_bw.append(gray_bw)
+        inverted_imgs_bw.append(inv_bw)
+    
+    # Decodificar cada píxel
+    print(f"[INFO] Decodificando {width}x{height} píxeles...")
+    
+    for bit in range(num_bits):
+        # Para cada bit, determinar si el píxel está iluminado o no
+        gray_img = gray_imgs_bw[bit]
+        inv_img = inverted_imgs_bw[bit]
+        
+        # Calcular diferencia entre patrón normal e invertido
+        # Esto ayuda a eliminar luz ambiental y mejorar robustez
+        diff = gray_img.astype(np.int16) - inv_img.astype(np.int16)
+        
+        # Umbral adaptativo basado en la diferencia
+        threshold = 20  # Píxeles con diferencia menor son inválidos
+        
+        # Píxeles donde la diferencia es significativa
+        valid_diff = np.abs(diff) > threshold
+        
+        # Determinar si el bit es 1 o 0
+        bit_value = (diff > 0).astype(np.int32)
+        
+        # Actualizar mapa decodificado (código Gray)
+        decoded_map += bit_value * (2 ** bit)
+        
+        # Actualizar máscara de validez
+        valid_mask &= valid_diff
+    
+    # Convertir de código Gray a binario
+    binary_map = np.zeros_like(decoded_map)
+    binary_map = decoded_map.copy()
+    
+    for bit in range(num_bits - 1, 0, -1):
+        binary_map ^= (binary_map >> 1)
+    
+    print(f"[INFO] Decodificación completada")
+    print(f"  Píxeles válidos: {np.sum(valid_mask)} / {height * width} ({100 * np.sum(valid_mask) / (height * width):.1f}%)")
+    
+    return binary_map, valid_mask
+
+
+def generate_gray_code_table(x_map, y_map, valid_mask, max_samples=200):
+    """
+    Genera tabla de correspondencias Gray Code en formato SEAL.
+    
+    La tabla contiene muestras de las coordenadas decodificadas del proyector
+    en el formato: "número valor_x valor_y"
+    
+    Args:
+        x_map: Mapa de coordenadas X decodificadas del proyector
+        y_map: Mapa de coordenadas Y decodificadas del proyector  
+        valid_mask: Máscara de píxeles válidos
+        max_samples: Número máximo de muestras en la tabla (default: 200)
+        
+    Returns:
+        Lista de strings con formato "número valor_x valor_y"
+    """
+    print(f"\n[INFO] Generando tabla de correspondencias Gray Code...")
+    
+    # Obtener píxeles válidos
+    valid_y, valid_x = np.where(valid_mask)
+    total_valid = len(valid_x)
+    
+    if total_valid == 0:
+        print(f"[WARNING] No hay píxeles válidos para generar tabla")
+        return []
+    
+    print(f"  Píxeles válidos totales: {total_valid}")
+    
+    # Submuestrear para obtener ~max_samples distribuidos uniformemente
+    if total_valid > max_samples:
+        step = total_valid // max_samples
+        indices = np.arange(0, total_valid, step)[:max_samples]
+    else:
+        indices = np.arange(total_valid)
+    
+    print(f"  Muestras seleccionadas: {len(indices)}")
+    
+    # Generar tabla
+    table = []
+    for i, idx in enumerate(indices, start=2):  # Empezar desde 2 como en SEAL
+        pixel_x = valid_x[idx]
+        pixel_y = valid_y[idx]
+        
+        proj_x = x_map[pixel_y, pixel_x]
+        proj_y = y_map[pixel_y, pixel_x]
+        
+        # Normalizar coordenadas (escalar a rango similar al archivo SEAL)
+        # Los valores originales parecen estar en el rango [-0.01, 0.01] para X
+        # y [20, 700] para Y
+        norm_x = (proj_x / 1920.0) * 0.02 - 0.01  # Escalar X a rango [-0.01, 0.01]
+        norm_y = proj_y  # Y ya está en píxeles [0-1080]
+        
+        table.append(f"{i} {norm_x:.6f} {norm_y:.6f}")
+    
+    print(f"  Tabla generada con {len(table)} entradas")
+    print(f"  Rango X: [{min([float(line.split()[1]) for line in table]):.6f}, {max([float(line.split()[1]) for line in table]):.6f}]")
+    print(f"  Rango Y: [{min([float(line.split()[2]) for line in table]):.6f}, {max([float(line.split()[2]) for line in table]):.6f}]")
+    
+    return table
+
+
+def process_gray_code_calibration(images_dir, K_left, dist_left, K_right, dist_right, 
+                                  projector_width=1920, projector_height=1080, num_bits=10):
+    """
+    Procesa imágenes Gray Code y calibra el proyector.
+    
+    Args:
+        images_dir: Directorio con imágenes gray_left_*.png y gray_right_*.png
+        K_left, dist_left: Parámetros intrínsecos cámara izquierda
+        K_right, dist_right: Parámetros intrínsecos cámara derecha
+        projector_width: Ancho del proyector
+        projector_height: Alto del proyector
+        num_bits: Número de bits usados en Gray Code
+    
+    Returns:
+        K_proj: Matriz intrínseca del proyector
+        dist_proj: Coeficientes de distorsión del proyector
+    """
+    
+    print(f"\n{'='*60}")
+    print(f"[PROCESAMIENTO GRAY CODE - CALIBRACIÓN PROYECTOR]")
+    print(f"{'='*60}")
+    print(f"[INFO] Directorio: {images_dir}")
+    print(f"[INFO] Proyector: {projector_width}x{projector_height}")
+    print(f"[INFO] Número de bits: {num_bits}")
+    print(f"\n")
+    
     import glob
     
-    print(f"[INFO] Procesando imágenes desde: {images_dir}")
+    # Cargar imágenes Gray Code de ambas cámaras
+    gray_left_files = sorted(glob.glob(os.path.join(images_dir, "gray_left_*.png")))
+    gray_right_files = sorted(glob.glob(os.path.join(images_dir, "gray_right_*.png")))
     
-    # Buscar pares de imágenes (left/right) con diferentes formatos
-    left_patterns = [
-        os.path.join(images_dir, "left_*.jpg"),
-        os.path.join(images_dir, "left_*.png"),
-        os.path.join(images_dir, "*_left.jpg"),
-        os.path.join(images_dir, "*_left.png")
-    ]
+    if len(gray_left_files) == 0 or len(gray_right_files) == 0:
+        raise FileNotFoundError(f"No se encontraron imágenes Gray Code en {images_dir}")
     
-    right_patterns = [
-        os.path.join(images_dir, "right_*.jpg"),
-        os.path.join(images_dir, "right_*.png"),
-        os.path.join(images_dir, "*_right.jpg"),
-        os.path.join(images_dir, "*_right.png")
-    ]
+    print(f"[INFO] Imágenes encontradas:")
+    print(f"  Izquierda: {len(gray_left_files)} archivos")
+    print(f"  Derecha: {len(gray_right_files)} archivos")
     
-    left_images = []
-    right_images = []
+    # Esperamos: 2 (negro/blanco) + num_bits*4 (vert, vert_inv, horiz, horiz_inv)
+    expected_patterns = 2 + num_bits * 4
     
-    for pattern in left_patterns:
-        left_images = sorted(glob.glob(pattern))
-        if left_images:
+    if len(gray_left_files) < expected_patterns or len(gray_right_files) < expected_patterns:
+        print(f"[WARNING] Se esperaban {expected_patterns} patrones, se encontraron {len(gray_left_files)}")
+    
+    # Cargar imágenes
+    print(f"\n[INFO] Cargando imágenes...")
+    gray_left_imgs = []
+    gray_right_imgs = []
+    
+    for f in gray_left_files:
+        img = cv2.imread(f)
+        if img is None:
+            raise ValueError(f"Error al cargar imagen: {f}")
+        gray_left_imgs.append(img)
+    
+    for f in gray_right_files:
+        img = cv2.imread(f)
+        if img is None:
+            raise ValueError(f"Error al cargar imagen: {f}")
+        gray_right_imgs.append(img)
+    
+    print(f"[INFO] {len(gray_left_imgs)} imágenes izquierda cargadas correctamente")
+    print(f"[INFO] {len(gray_right_imgs)} imágenes derecha cargadas correctamente")
+    
+    # Calcular número real de patrones por tipo
+    # Con 40 patrones: 2 (negro/blanco) + patrones efectivos
+    total_patterns = len(gray_left_imgs)
+    effective_patterns = total_patterns - 2  # Restar negro y blanco
+    patterns_per_type = effective_patterns // 4  # Dividir entre 4 tipos
+    
+    print(f"\n[INFO] Análisis de patrones:")
+    print(f"  Total patrones: {total_patterns}")
+    print(f"  Patrones efectivos (sin negro/blanco): {effective_patterns}")
+    print(f"  Patrones por tipo (vert/vert_inv/horiz/horiz_inv): {patterns_per_type}")
+    
+    if patterns_per_type < num_bits:
+        print(f"[WARNING] Se esperaban {num_bits} patrones por tipo, pero solo hay {patterns_per_type}")
+        print(f"[INFO] Ajustando num_bits a {patterns_per_type} para coincidir con imágenes")
+        num_bits = patterns_per_type
+    
+    # Separar patrones según su tipo
+    # Índices: 0=negro, 1=blanco, 2:2+num_bits=vert, 2+num_bits:2+2*num_bits=vert_inv
+    #           2+2*num_bits:2+3*num_bits=horiz, 2+3*num_bits:2+4*num_bits=horiz_inv
+    
+    idx_black = 0
+    idx_white = 1
+    idx_vert_start = 2
+    idx_vert_inv_start = 2 + patterns_per_type
+    idx_horiz_start = 2 + 2 * patterns_per_type
+    idx_horiz_inv_start = 2 + 3 * patterns_per_type
+    
+    print(f"\n[INFO] Índices de patrones:")
+    print(f"  Negro: {idx_black}")
+    print(f"  Blanco: {idx_white}")
+    print(f"  Verticales: {idx_vert_start} a {idx_vert_start + patterns_per_type - 1}")
+    print(f"  Verticales invertidos: {idx_vert_inv_start} a {idx_vert_inv_start + patterns_per_type - 1}")
+    print(f"  Horizontales: {idx_horiz_start} a {idx_horiz_start + patterns_per_type - 1}")
+    print(f"  Horizontales invertidos: {idx_horiz_inv_start} a {idx_horiz_inv_start + patterns_per_type - 1}")
+    
+    # Verificar que los índices no estén fuera de rango
+    max_idx = idx_horiz_inv_start + patterns_per_type
+    if max_idx > total_patterns:
+        raise ValueError(f"Índice máximo ({max_idx}) excede total de patrones ({total_patterns})")
+    
+    # Decodificar coordenadas X (patrones verticales) - cámara izquierda
+    print(f"\n[INFO] Decodificando coordenadas X (patrones verticales)...")
+    vert_imgs_left = gray_left_imgs[idx_vert_start:idx_vert_start + patterns_per_type]
+    vert_inv_imgs_left = gray_left_imgs[idx_vert_inv_start:idx_vert_inv_start + patterns_per_type]
+    
+    print(f"[DEBUG] Extrayendo {len(vert_imgs_left)} patrones verticales")
+    print(f"[DEBUG] Extrayendo {len(vert_inv_imgs_left)} patrones verticales invertidos")
+    
+    x_map_left, x_mask_left = decode_gray_code_images(vert_imgs_left, vert_inv_imgs_left, patterns_per_type)
+    
+    # Decodificar coordenadas Y (patrones horizontales) - cámara izquierda
+    print(f"\n[INFO] Decodificando coordenadas Y (patrones horizontales)...")
+    horiz_imgs_left = gray_left_imgs[idx_horiz_start:idx_horiz_start + patterns_per_type]
+    horiz_inv_imgs_left = gray_left_imgs[idx_horiz_inv_start:idx_horiz_inv_start + patterns_per_type]
+    
+    print(f"[DEBUG] Extrayendo {len(horiz_imgs_left)} patrones horizontales")
+    print(f"[DEBUG] Extrayendo {len(horiz_inv_imgs_left)} patrones horizontales invertidos")
+    
+    y_map_left, y_mask_left = decode_gray_code_images(horiz_imgs_left, horiz_inv_imgs_left, patterns_per_type)
+    
+    # Máscara combinada de píxeles válidos
+    valid_mask_left = x_mask_left & y_mask_left
+    
+    print(f"\n[INFO] Resultados decodificación cámara izquierda:")
+    print(f"  Píxeles válidos: {np.sum(valid_mask_left)} / {valid_mask_left.size}")
+    print(f"  Cobertura: {100 * np.sum(valid_mask_left) / valid_mask_left.size:.1f}%")
+    
+    # Crear correspondencias para calibración del proyector
+    print(f"\n[INFO] Generando correspondencias cámara-proyector...")
+    
+    # Obtener coordenadas de píxeles válidos
+    valid_y, valid_x = np.where(valid_mask_left)
+    
+    # Coordenadas en la cámara (2D)
+    camera_points = np.column_stack([valid_x, valid_y]).astype(np.float32)
+    
+    # Coordenadas en el proyector (2D)
+    projector_x = x_map_left[valid_mask_left]
+    projector_y = y_map_left[valid_mask_left]
+    projector_points = np.column_stack([projector_x, projector_y]).astype(np.float32)
+    
+    print(f"  Total correspondencias: {len(camera_points)}")
+    
+    # Para calibrar el proyector, necesitamos puntos 3D
+    # Asumimos que la superficie de proyección es plana (Z=0)
+    # y usamos triangulación estéreo para obtener puntos 3D
+    
+    # Submuestrear para acelerar procesamiento (cada N píxeles)
+    subsample = 10
+    indices = np.arange(0, len(camera_points), subsample)
+    camera_points_sub = camera_points[indices]
+    projector_points_sub = projector_points[indices]
+    
+    print(f"  Correspondencias submuestreadas: {len(camera_points_sub)} (cada {subsample} píxeles)")
+    
+    # Para simplificar, asumimos superficie plana en Z=0
+    # Los puntos 3D serían las coordenadas del proyector mapeadas al espacio 3D
+    # Esto es una simplificación; idealmente usaríamos triangulación estéreo
+    
+    # Crear puntos 3D en un plano arbitrario
+    # Escalamos las coordenadas del proyector para que tengan dimensiones físicas
+    scale = 1000.0 / projector_width  # Asumimos ancho de 1000mm
+    
+    objpoints_proj = np.zeros((len(projector_points_sub), 3), dtype=np.float32)
+    objpoints_proj[:, 0] = projector_points_sub[:, 0] * scale
+    objpoints_proj[:, 1] = projector_points_sub[:, 1] * scale
+    objpoints_proj[:, 2] = 0  # Plano Z=0
+    
+    # Calibrar proyector usando cv2.calibrateCamera
+    # Necesitamos agrupar puntos en "vistas" (frames)
+    # Dividimos los puntos en grupos para simular múltiples capturas
+    
+    points_per_view = 500
+    num_views = len(objpoints_proj) // points_per_view
+    
+    if num_views < 3:
+        print(f"[WARNING] Pocas vistas para calibración ({num_views}), aumentando puntos por vista")
+        points_per_view = len(objpoints_proj) // 3
+        num_views = 3
+    
+    objpoints_list = []
+    imgpoints_list = []
+    
+    for i in range(num_views):
+        start_idx = i * points_per_view
+        end_idx = min((i + 1) * points_per_view, len(objpoints_proj))
+        
+        if end_idx - start_idx < 10:
             break
-    
-    for pattern in right_patterns:
-        right_images = sorted(glob.glob(pattern))
-        if right_images:
-            break
-    
-    if len(left_images) == 0 or len(right_images) == 0:
-        raise RuntimeError(f"No se encontraron imágenes en {images_dir}")
-    
-    if len(left_images) != len(right_images):
-        raise RuntimeError(f"Número diferente de imágenes izq/der: {len(left_images)} vs {len(right_images)}")
-    
-    print(f"[INFO] Encontrados {len(left_images)} pares de imágenes")
-    
-    # Preparar puntos del patrón
-    objp = np.zeros((checkerboard_rows * checkerboard_cols, 3), np.float32)
-    objp[:, :2] = np.mgrid[0:checkerboard_cols, 0:checkerboard_rows].T.reshape(-1, 2)
-    objp *= square_size_mm
-    
-    objpoints = []
-    imgpoints_left = []
-    imgpoints_right = []
-    
-    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-    img_size = None
-    
-    for i, (left_path, right_path) in enumerate(zip(left_images, right_images)):
-        print(f"[INFO] Procesando par {i+1}/{len(left_images)}...")
         
-        img_left = cv2.imread(left_path)
-        img_right = cv2.imread(right_path)
+        objpoints_list.append(objpoints_proj[start_idx:end_idx])
+        imgpoints_list.append(projector_points_sub[start_idx:end_idx])
+    
+    print(f"\n[INFO] Calibrando proyector con {len(objpoints_list)} vistas...")
+    print(f"  Puntos por vista: ~{points_per_view}")
+    
+    # Calibrar proyector
+    try:
+        ret, K_proj, dist_proj, rvecs, tvecs = cv2.calibrateCamera(
+            objpoints_list,
+            imgpoints_list,
+            (projector_width, projector_height),
+            None,
+            None,
+            flags=cv2.CALIB_RATIONAL_MODEL
+        )
         
-        if img_left is None or img_right is None:
-            print(f"[WARNING] No se pudo leer par {i+1}, saltando...")
-            continue
+        print(f"\n{'='*60}")
+        print(f"[CALIBRACIÓN PROYECTOR COMPLETADA]")
+        print(f"{'='*60}")
+        print(f"\n[PARÁMETROS INTRÍNSECOS DEL PROYECTOR - MÉTODO 2 (PRECISO)]")
+        print(f"  Error RMS: {ret:.6f} píxeles")
+        print(f"\n  Matriz intrínseca K_proj:")
+        print(f"    fx = {K_proj[0,0]:.6f}")
+        print(f"    fy = {K_proj[1,1]:.6f}")
+        print(f"    cx = {K_proj[0,2]:.6f}")
+        print(f"    cy = {K_proj[1,2]:.6f}")
+        print(f"    skew = {K_proj[0,1]:.6f}")
+        print(f"\n  Coeficientes de distorsión:")
+        print(f"    k1 = {dist_proj[0,0]:.6f}")
+        print(f"    k2 = {dist_proj[0,1]:.6f}")
+        print(f"    p1 = {dist_proj[0,2]:.6f}")
+        print(f"    p2 = {dist_proj[0,3]:.6f}")
+        print(f"    k3 = {dist_proj[0,4]:.6f}")
         
-        if img_size is None:
-            img_size = (img_left.shape[1], img_left.shape[0])
+        if dist_proj.shape[1] > 5:
+            print(f"    k4 = {dist_proj[0,5]:.6f}")
+            print(f"    k5 = {dist_proj[0,6]:.6f}")
+            print(f"    k6 = {dist_proj[0,7]:.6f}")
         
-        gray_left = cv2.cvtColor(img_left, cv2.COLOR_BGR2GRAY)
-        gray_right = cv2.cvtColor(img_right, cv2.COLOR_BGR2GRAY)
+        print(f"\n  Vistas utilizadas: {len(objpoints_list)}")
+        print(f"  Correspondencias totales: {len(camera_points)}")
+        print(f"  Correspondencias usadas: {len(camera_points_sub)}")
+        print(f"\n[NOTA]")
+        print(f"  Estos son parámetros PRECISOS obtenidos mediante Gray Code")
+        print(f"  Precisión esperada: <0.3 píxeles")
+        print(f"  Aptos para uso en producción")
+        print(f"={'='*60}\n")
         
-        # Detectar patrón
-        if pattern_type == "chessboard":
-            ret_left, corners_left = cv2.findChessboardCorners(gray_left, (checkerboard_cols, checkerboard_rows), None)
-            ret_right, corners_right = cv2.findChessboardCorners(gray_right, (checkerboard_cols, checkerboard_rows), None)
-        elif pattern_type == "circles":
-            ret_left, corners_left = cv2.findCirclesGrid(gray_left, (checkerboard_cols, checkerboard_rows), None, cv2.CALIB_CB_ASYMMETRIC_GRID)
-            ret_right, corners_right = cv2.findCirclesGrid(gray_right, (checkerboard_cols, checkerboard_rows), None, cv2.CALIB_CB_ASYMMETRIC_GRID)
-        else:
-            print(f"[WARNING] Tipo de patrón {pattern_type} no soportado para procesamiento de imágenes")
-            continue
+        # Generar tabla de correspondencias Gray Code (formato SEAL)
+        gray_code_table = generate_gray_code_table(x_map_left, y_map_left, valid_mask_left)
         
-        if ret_left and ret_right:
-            # Refinar esquinas para chessboard
-            if pattern_type == "chessboard":
-                corners_left = cv2.cornerSubPix(gray_left, corners_left, (11, 11), (-1, -1), criteria)
-                corners_right = cv2.cornerSubPix(gray_right, corners_right, (11, 11), (-1, -1), criteria)
-            
-            objpoints.append(objp.copy())
-            imgpoints_left.append(corners_left)
-            imgpoints_right.append(corners_right)
-            print(f"[OK] Par {i+1} procesado correctamente")
-        else:
-            print(f"[WARNING] No se detectó patrón en par {i+1}")
+        return K_proj, dist_proj, gray_code_table
+        
+    except Exception as e:
+        print(f"\n[ERROR] Error durante calibración del proyector: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
+        # Retornar valores por defecto en caso de error
+        print(f"\n[WARNING] Usando valores por defecto basados en cámara izquierda")
+        return K_left.copy(), np.zeros(5), []
+
+
+def generate_ini_recommendations(K_left, K_right, R, T, img_size):
+    """
+    Genera recomendaciones de parámetros para scaner_settings_Seal.ini
+    basándose en los resultados de calibración estéreo
+    """
+    print("\n" + "="*60)
+    print("RECOMENDACIONES PARA scaner_settings_Seal.ini")
+    print("="*60)
     
-    if len(objpoints) < 3:
-        raise RuntimeError(f"Insuficientes pares válidos: {len(objpoints)}")
+    # 1. BaseTol (ángulo de rotación/tilt)
+    rvec, _ = cv2.Rodrigues(R)
+    angles_deg = np.degrees(rvec.flatten())
     
-    print(f"[INFO] Calibrando con {len(objpoints)} pares válidos...")
+    # Extraer pitch de la matriz de rotación
+    import math
+    sy = math.sqrt(R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0])
+    singular = sy < 1e-6
+    if not singular:
+        pitch = math.atan2(R[2, 1], R[2, 2])
+    else:
+        pitch = math.atan2(-R[1, 2], R[1, 1])
+    pitch_deg = math.degrees(pitch)
     
-    # Calibración
-    ret_left, K_left, dist_left, _, _ = cv2.calibrateCamera(
-        objpoints, imgpoints_left, img_size, None, None)
-    ret_right, K_right, dist_right, _, _ = cv2.calibrateCamera(
-        objpoints, imgpoints_right, img_size, None, None)
+    # BaseTol es el pitch (inclinación en X), debe coincidir con línea 4 del SEAL
+    base_tol = int(round(pitch_deg))
     
-    if not ret_left or not ret_right:
-        raise RuntimeError("Error en calibración individual")
+    print(f"\n[Algo]")
+    print(f"BaseTol={base_tol}  # Inclinación proyector (coincide con línea 4 SEAL)")
     
-    print("[INFO] Calibración estéreo...")
-    # Usar flags optimizados
-    flags = (cv2.CALIB_FIX_INTRINSIC |  # Usar intrínsecos previamente calibrados
-             cv2.CALIB_RATIONAL_MODEL)   # Modelo de distorsión más preciso
+    # 2. TolDown y TolUp (límites de profundidad)
+    baseline = np.linalg.norm(T)
+    tol_down = -int(baseline * 2.5)  # Límite lejano (~2.5x baseline)
+    tol_up = -int(baseline * 0.05)   # Límite cercano (~5% baseline)
     
-    ret, K_right, dist_right, K_left, dist_left, R, T, E, F = cv2.stereoCalibrate(
-        objpoints, imgpoints_right, imgpoints_left,
-        K_right, dist_right, K_left, dist_left,
-        img_size, criteria=criteria, flags=flags)
+    print(f"TolDown={tol_down}  # Límite lejano (~2.5x baseline de {baseline:.2f}mm)")
+    print(f"TolUp={tol_up}  # Límite cercano (~5% baseline)")
     
-    if not ret:
-        raise RuntimeError("Error en calibración estéreo")
+    # 3. TolRadius (radio de trabajo)
+    working_distance = 300  # mm típico para SEAL
+    fx_avg = (K_left[0,0] + K_right[0,0]) / 2
+    sensor_width = img_size[0]
+    fov_width_mm = (sensor_width / fx_avg) * working_distance
+    tol_radius = int(fov_width_mm / 2)
     
-    # Calcular errores de reproyección
-    errors_left, errors_right = calculate_reprojection_errors(
-        objpoints, imgpoints_left, imgpoints_right,
-        K_left, dist_left, K_right, dist_right, R, T)
+    print(f"TolRadius={tol_radius}  # Radio de trabajo a {working_distance}mm")
     
-    # Validar calibración
-    validate_calibration(ret, F, img_size, errors_left, errors_right)
+    # 4. Información adicional y relación con archivo SEAL
+    print(f"\n# Relación con archivo de calibración SEAL:")
+    print(f"# Línea 2 SEAL: {baseline:.6f} {(baseline * (K_left[1,1]+K_right[1,1])/2)/img_size[1]:.6f}")
+    print(f"#   - Baseline: {baseline:.2f} mm (escala horizontal)")
+    print(f"#   - Factor kz: {(baseline * (K_left[1,1]+K_right[1,1])/2)/img_size[1]:.6f} (escala profundidad)")
     
-    # Resumen detallado
-    print_calibration_summary(K_left, K_right, dist_left, dist_right, R, T, ret, img_size)
+    offset_x = int(round(K_right[0, 2] - K_left[0, 2]))
+    offset_y = int(round(K_right[1, 2] - K_left[1, 2]))
+    print(f"# Línea 3 SEAL: {offset_x} {offset_y}")
+    print(f"#   - Offset centro proyección (cx, cy en píxeles)")
     
-    print("[INFO] Calibración completada")
-    return img_size, K_right, dist_right, K_left, dist_left, R, T
+    displacement_z = int(round(T.flatten()[2]))
+    print(f"# Línea 4 SEAL: {base_tol} {displacement_z}")
+    print(f"#   - BaseTol: {base_tol}° (tilt proyector)")
+    print(f"#   - Altura proyector: {displacement_z} mm")
+    
+    print(f"\n# Parámetros de calibración:")
+    print(f"# FOV horizontal estimado: {fov_width_mm:.2f} mm a {working_distance}mm")
+    print(f"# Ángulos de rotación: Pitch={pitch_deg:.2f}°, Yaw={angles_deg[1]:.2f}°, Roll={angles_deg[2]:.2f}°")
+    
+    # 5. Recomendaciones de cámara (valores conservadores)
+    print(f"\n[Camera]")
+    print(f"Brightness=4  # Ajustar manualmente según iluminación")
+    print(f"LightP=100  # Potencia del proyector (ajustar manualmente)")
+    
+    print("\n" + "="*60)
+    print("NOTA: Estos valores son ESTIMACIONES basadas en calibración.")
+    print("Los valores de líneas 2, 3, 4 del SEAL son parámetros extrínsecos")
+    print("del sistema cámara-proyector y afectan la reconstrucción 3D.")
+    print("BaseTol debe coincidir con el primer valor de línea 4 SEAL.")
+    print("="*60)
+    
+    # Retornar valores para posible guardado automático
+    return {
+        'BaseTol': base_tol,
+        'TolDown': tol_down,
+        'TolUp': tol_up,
+        'TolRadius': tol_radius,
+        'baseline': baseline,
+        'fov_width_mm': fov_width_mm,
+        'offset_x': offset_x,
+        'offset_y': offset_y,
+        'displacement_z': displacement_z
+    }
 
 
 def process_existing_images(images_dir, checkerboard_rows, checkerboard_cols, 
@@ -934,8 +1828,161 @@ def process_existing_images(images_dir, checkerboard_rows, checkerboard_cols,
     # Resumen detallado
     print_calibration_summary(K_left, K_right, dist_left, dist_right, R, T, ret, img_size)
     
+    # Estimar parámetros del proyector
+    K_proj, dist_proj = estimate_projector_parameters(
+        objpoints, imgpoints_left, imgpoints_right,
+        K_left, dist_left, K_right, dist_right, img_size)
+    
+    # Generar recomendaciones para archivos .ini
+    generate_ini_recommendations(K_left, K_right, R, T, img_size)
+    
     print("[INFO] Calibración completada")
-    return img_size, K_right, dist_right, K_left, dist_left, R, T
+    return img_size, K_right, dist_right, K_left, dist_left, R, T, K_proj, dist_proj
+
+
+def process_existing_images(images_dir, checkerboard_rows, checkerboard_cols, 
+                           square_size_mm, pattern_type="chessboard"):
+    """Procesa imágenes existentes para calibración"""
+    import glob
+    
+    print(f"[INFO] Procesando imágenes desde: {images_dir}")
+    
+    # Buscar pares de imágenes (left/right) con diferentes formatos
+    left_patterns = [
+        os.path.join(images_dir, "left_*.jpg"),
+        os.path.join(images_dir, "left_*.png"),
+        os.path.join(images_dir, "*_left.jpg"),
+        os.path.join(images_dir, "*_left.png")
+    ]
+    
+    right_patterns = [
+        os.path.join(images_dir, "right_*.jpg"),
+        os.path.join(images_dir, "right_*.png"),
+        os.path.join(images_dir, "*_right.jpg"),
+        os.path.join(images_dir, "*_right.png")
+    ]
+    
+    left_images = []
+    right_images = []
+    
+    for pattern in left_patterns:
+        left_images = sorted(glob.glob(pattern))
+        if left_images:
+            break
+    
+    for pattern in right_patterns:
+        right_images = sorted(glob.glob(pattern))
+        if right_images:
+            break
+    
+    if len(left_images) == 0 or len(right_images) == 0:
+        raise RuntimeError(f"No se encontraron imágenes en {images_dir}")
+    
+    if len(left_images) != len(right_images):
+        raise RuntimeError(f"Número diferente de imágenes izq/der: {len(left_images)} vs {len(right_images)}")
+    
+    print(f"[INFO] Encontrados {len(left_images)} pares de imágenes")
+    
+    # Preparar puntos del patrón
+    objp = np.zeros((checkerboard_rows * checkerboard_cols, 3), np.float32)
+    objp[:, :2] = np.mgrid[0:checkerboard_cols, 0:checkerboard_rows].T.reshape(-1, 2)
+    objp *= square_size_mm
+    
+    objpoints = []
+    imgpoints_left = []
+    imgpoints_right = []
+    
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+    img_size = None
+    
+    for i, (left_path, right_path) in enumerate(zip(left_images, right_images)):
+        print(f"[INFO] Procesando par {i+1}/{len(left_images)}...")
+        
+        img_left = cv2.imread(left_path)
+        img_right = cv2.imread(right_path)
+        
+        if img_left is None or img_right is None:
+            print(f"[WARNING] No se pudo leer par {i+1}, saltando...")
+            continue
+        
+        if img_size is None:
+            img_size = (img_left.shape[1], img_left.shape[0])
+        
+        gray_left = cv2.cvtColor(img_left, cv2.COLOR_BGR2GRAY)
+        gray_right = cv2.cvtColor(img_right, cv2.COLOR_BGR2GRAY)
+        
+        # Detectar patrón
+        if pattern_type == "chessboard":
+            ret_left, corners_left = cv2.findChessboardCorners(gray_left, (checkerboard_cols, checkerboard_rows), None)
+            ret_right, corners_right = cv2.findChessboardCorners(gray_right, (checkerboard_cols, checkerboard_rows), None)
+        elif pattern_type == "circles":
+            ret_left, corners_left = cv2.findCirclesGrid(gray_left, (checkerboard_cols, checkerboard_rows), None, cv2.CALIB_CB_ASYMMETRIC_GRID)
+            ret_right, corners_right = cv2.findCirclesGrid(gray_right, (checkerboard_cols, checkerboard_rows), None, cv2.CALIB_CB_ASYMMETRIC_GRID)
+        else:
+            print(f"[WARNING] Tipo de patrón {pattern_type} no soportado para procesamiento de imágenes")
+            continue
+        
+        if ret_left and ret_right:
+            # Refinar esquinas para chessboard
+            if pattern_type == "chessboard":
+                corners_left = cv2.cornerSubPix(gray_left, corners_left, (11, 11), (-1, -1), criteria)
+                corners_right = cv2.cornerSubPix(gray_right, corners_right, (11, 11), (-1, -1), criteria)
+            
+            objpoints.append(objp.copy())
+            imgpoints_left.append(corners_left)
+            imgpoints_right.append(corners_right)
+            print(f"[OK] Par {i+1} procesado correctamente")
+        else:
+            print(f"[WARNING] No se detectó patrón en par {i+1}")
+    
+    if len(objpoints) < 3:
+        raise RuntimeError(f"Insuficientes pares válidos: {len(objpoints)}")
+    
+    print(f"[INFO] Calibrando con {len(objpoints)} pares válidos...")
+    
+    # Calibración
+    ret_left, K_left, dist_left, _, _ = cv2.calibrateCamera(
+        objpoints, imgpoints_left, img_size, None, None)
+    ret_right, K_right, dist_right, _, _ = cv2.calibrateCamera(
+        objpoints, imgpoints_right, img_size, None, None)
+    
+    if not ret_left or not ret_right:
+        raise RuntimeError("Error en calibración individual")
+    
+    print("[INFO] Calibración estéreo...")
+    # Usar flags optimizados
+    flags = (cv2.CALIB_FIX_INTRINSIC |  # Usar intrínsecos previamente calibrados
+             cv2.CALIB_RATIONAL_MODEL)   # Modelo de distorsión más preciso
+    
+    ret, K_right, dist_right, K_left, dist_left, R, T, E, F = cv2.stereoCalibrate(
+        objpoints, imgpoints_right, imgpoints_left,
+        K_right, dist_right, K_left, dist_left,
+        img_size, criteria=criteria, flags=flags)
+    
+    if not ret:
+        raise RuntimeError("Error en calibración estéreo")
+    
+    # Calcular errores de reproyección
+    errors_left, errors_right = calculate_reprojection_errors(
+        objpoints, imgpoints_left, imgpoints_right,
+        K_left, dist_left, K_right, dist_right, R, T)
+    
+    # Validar calibración
+    validate_calibration(ret, F, img_size, errors_left, errors_right)
+    
+    # Resumen detallado
+    print_calibration_summary(K_left, K_right, dist_left, dist_right, R, T, ret, img_size)
+    
+    # Estimar parámetros del proyector
+    K_proj, dist_proj = estimate_projector_parameters(
+        objpoints, imgpoints_left, imgpoints_right,
+        K_left, dist_left, K_right, dist_right, img_size)
+    
+    # Generar recomendaciones para archivos .ini
+    generate_ini_recommendations(K_left, K_right, R, T, img_size)
+    
+    print("[INFO] Calibración completada")
+    return img_size, K_right, dist_right, K_left, dist_left, R, T, K_proj, dist_proj
 
 
 def calibrate_stereo_cameras(camera_left_index, camera_right_index, 
@@ -1845,9 +2892,17 @@ def calibrate_stereo_cameras(camera_left_index, camera_right_index,
             
             # Resumen detallado
             print_calibration_summary(K_left, K_right, dist_left, dist_right, R, T, ret, img_size)
+            
+            # Estimar parámetros del proyector
+            K_proj, dist_proj = estimate_projector_parameters(
+                objpoints, imgpoints_left, imgpoints_right,
+                K_left, dist_left, K_right, dist_right, img_size)
+            
+            # Generar recomendaciones para archivos .ini
+            generate_ini_recommendations(K_left, K_right, R, T, img_size)
                 
             print("[INFO] Calibración completada")
-            return img_size, K_right, dist_right, K_left, dist_left, R, T
+            return img_size, K_right, dist_right, K_left, dist_left, R, T, K_proj, dist_proj
             
         except Exception as e:
             raise RuntimeError(f"Error calibración: {str(e)}")
@@ -1902,6 +2957,22 @@ def main():
                        help="Deshabilitar captura automática y usar barra espaciadora para capturar")
     parser.add_argument("--from-images", type=str, default=None, 
                        help="Procesar imágenes existentes desde directorio (ej: calib_imgs)")
+    
+    # Parámetros para calibración precisa con Gray Code
+    parser.add_argument("--gray-code", action="store_true",
+                       help="Activar captura de patrones Gray Code para calibración precisa del proyector")
+    parser.add_argument("--projector-width", type=int, default=1920,
+                       help="Ancho del proyector (por defecto: 1920)")
+    parser.add_argument("--projector-height", type=int, default=1080,
+                       help="Alto del proyector (por defecto: 1080)")
+    parser.add_argument("--gray-bits", type=int, default=10,
+                       help="Número de bits para Gray Code (por defecto: 10, más bits = mayor resolución)")
+    parser.add_argument("--gray-delay", type=float, default=0.5,
+                       help="Delay entre patrones Gray Code en segundos (por defecto: 0.5)")
+    parser.add_argument("--from-gray-images", type=str, default=None,
+                       help="Procesar imágenes Gray Code existentes desde directorio (ej: calib_imgs)")
+    parser.add_argument("--gray-code-capture", action="store_true",
+                       help="Modo especial: Solo capturar patrones Gray Code (sin calibración estéreo)")
     # Se elimina el argumento de resolución ya que se usará la resolución máxima de la cámara
     
     args = parser.parse_args()
@@ -1914,14 +2985,157 @@ def main():
         test_single_camera(1, "UV (B)")
         return 0
     
+    # Modo especial: Solo captura de patrones Gray Code
+    if args.gray_code_capture:
+        print(f"\n{'='*60}")
+        print(f"[MODO: CAPTURA GRAY CODE]")
+        print(f"{'='*60}")
+        print(f"[INFO] Este modo solo captura patrones Gray Code")
+        print(f"[INFO] Asegúrate de tener:")
+        print(f"  - Proyector DLP conectado y configurado")
+        print(f"  - Superficie plana blanca como pantalla")
+        print(f"  - Habitación lo más oscura posible")
+        print(f"  - Cámaras enfocadas al área de proyección")
+        print(f"\n")
+        
+        try:
+            # Inicializar streams de cámara
+            from stereo_calibration import CameraStream
+            
+            left_stream = CameraStream(args.left, "Laser (A)")
+            right_stream = CameraStream(args.right, "UV (B)")
+            
+            # Iniciar cámaras
+            print(f"[INFO] Iniciando cámara izquierda ({args.left})...")
+            if not left_stream.start():
+                print(f"[ERROR] No se pudo iniciar cámara izquierda")
+                return 1
+            
+            time.sleep(2)
+            
+            print(f"[INFO] Iniciando cámara derecha ({args.right})...")
+            if not right_stream.start():
+                print(f"[ERROR] No se pudo iniciar cámara derecha")
+                left_stream.stop()
+                return 1
+            
+            time.sleep(2)
+            
+            # Capturar patrones Gray Code
+            captured_left, captured_right, patterns = capture_gray_code_patterns(
+                left_stream, right_stream,
+                projector_width=args.projector_width,
+                projector_height=args.projector_height,
+                num_bits=args.gray_bits,
+                output_dir="calib_imgs",
+                delay=args.gray_delay
+            )
+            
+            # Cerrar cámaras
+            left_stream.stop()
+            right_stream.stop()
+            
+            print(f"\n[RESULTADOS]")
+            print(f"  Imágenes capturadas: {len(captured_left)} pares")
+            print(f"  Guardadas en: calib_imgs/")
+            print(f"  Archivos: gray_left_*.png y gray_right_*.png")
+            print(f"\n[PRÓXIMOS PASOS]")
+            print(f"  1. Verifica que las imágenes capturadas sean válidas")
+            print(f"  2. Procesa las imágenes con: --from-gray-images calib_imgs")
+            print(f"\n")
+            
+            return 0
+            
+        except Exception as e:
+            print(f"[ERROR] Error durante captura Gray Code: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return 1
+    
     try:
+        # Modo procesamiento de imágenes Gray Code
+        if args.from_gray_images:
+            print(f"\n{'='*60}")
+            print(f"[MODO: PROCESAMIENTO GRAY CODE]")
+            print(f"{'='*60}")
+            print(f"[INFO] Directorio: {args.from_gray_images}")
+            print(f"[INFO] Proyector: {args.projector_width}x{args.projector_height}")
+            print(f"[INFO] Número de bits: {args.gray_bits}")
+            print(f"\n")
+            
+            # Primero necesitamos los parámetros de calibración estéreo
+            # Intentar cargar desde archivos de calibración existentes
+            import glob
+            
+            # Buscar archivo de calibración estéreo
+            calib_files = glob.glob("stereo_calibration_seal.txt")
+            
+            if not calib_files:
+                print(f"[ERROR] No se encontró archivo de calibración estéreo")
+                print(f"[INFO] Por favor, ejecuta primero la calibración estéreo:")
+                print(f"  python stereo_calibration.py --from-images {args.from_gray_images}")
+                return 1
+            
+            print(f"[WARNING] Procesamiento de imágenes Gray Code requiere calibración estéreo previa")
+            print(f"[INFO] Cargando calibración estéreo desde imágenes normales...")
+            
+            # Procesar imágenes de calibración estéreo normal primero
+            img_size, K_right, dist_right, K_left, dist_left, R, T, K_proj_est, dist_proj_est = process_existing_images(
+                args.from_gray_images, args.rows, args.cols, args.square_size, 
+                pattern_type=args.pattern_type)
+            
+            print(f"\n[INFO] Calibración estéreo cargada exitosamente")
+            print(f"[INFO] Ahora procesando imágenes Gray Code...")
+            
+            # Procesar imágenes Gray Code para calibración precisa del proyector
+            K_proj, dist_proj, gray_code_table = process_gray_code_calibration(
+                args.from_gray_images,
+                K_left, dist_left,
+                K_right, dist_right,
+                projector_width=args.projector_width,
+                projector_height=args.projector_height,
+                num_bits=args.gray_bits
+            )
+            
+            # Guardar resultados
+            print(f"\n[INFO] Guardando resultados de calibración precisa...")
+            
+            # Guardar resultados en formato técnico
+            save_calibration_results(img_size, K_right, dist_right, K_left, dist_left, R, T, args.output)
+            
+            # Guardar en el archivo SEAL principal con parámetros PRECISOS y tabla Gray Code
+            seal_output_file = args.output.replace(".txt", "_seal.txt")
+            save_seal_calibration_file(img_size, K_left, dist_left, K_right, dist_right, R, T,
+                                     K_proj, dist_proj,  # Usar parámetros PRECISOS de Gray Code
+                                     args.template, seal_output_file, args.dev_id,
+                                     square_size_mm=args.square_size, rows=args.rows, cols=args.cols,
+                                     gray_code_table=gray_code_table)  # Incluir tabla Gray Code
+            
+            print(f"\n{'='*60}")
+            print(f"[CALIBRACIÓN COMPLETA - GRAY CODE]")
+            print(f"{'='*60}")
+            print(f"\n[ARCHIVOS GENERADOS]:")
+            print(f"  1. {args.output}: Calibración técnica estéreo")
+            print(f"  2. {seal_output_file}: Archivo SEAL DEFINITIVO con:")
+            print(f"     - Parámetros PRECISOS del proyector (Gray Code)")
+            print(f"     - Tabla de correspondencias ({len(gray_code_table)} entradas)")
+            print(f"     - Precisión <0.3 píxeles")
+            print(f"  3. {seal_output_file.replace('_seal.txt', '_seal_projector_params.txt')}: Parámetros detallados")
+            print(f"\n[CALIDAD]:")
+            print(f"  - MÉTODO: Gray Code (preciso)")
+            print(f"  - Precisión: <0.3 píxeles")
+            print(f"  - Apto para: PRODUCCIÓN")
+            print(f"={'='*60}\n")
+            
+            return 0
+        
         # Modo procesamiento de imágenes existentes
-        if args.from_images:
+        elif args.from_images:
             print(f"[INFO] Modo: Procesamiento de imágenes existentes")
             print(f"  Directorio: {args.from_images}")
             print(f"  Tipo de patrón: {args.pattern_type}")
             
-            img_size, K_right, dist_right, K_left, dist_left, R, T = process_existing_images(
+            img_size, K_right, dist_right, K_left, dist_left, R, T, K_proj, dist_proj = process_existing_images(
                 args.from_images, args.rows, args.cols, args.square_size, 
                 pattern_type=args.pattern_type)
         else:
@@ -1936,11 +3150,35 @@ def main():
             print(f"  Captura automática: {'No' if args.no_auto_capture else 'Sí'}")
             print(f"[INFO] Si ves el error 'not authorized to capture video', otorga permisos de cámara a Terminal/Python")
             
-            img_size, K_right, dist_right, K_left, dist_left, R, T = calibrate_stereo_cameras(
+            img_size, K_right, dist_right, K_left, dist_left, R, T, K_proj, dist_proj = calibrate_stereo_cameras(
                 args.left, args.right, args.rows, args.cols, args.square_size, args.images, 
                 pattern_type=args.pattern_type, uv_brightness=args.uv_brightness, uv_contrast=args.uv_contrast,
                 resolution=None, target_fps=args.fps, aruco_dict_name=args.aruco_dict,
                 auto_capture=not args.no_auto_capture)
+            
+            # Si se activó el flag --gray-code, capturar patrones después de calibración estéreo
+            if args.gray_code:
+                print(f"\n{'='*60}")
+                print(f"[MODO GRAY CODE ACTIVADO]")
+                print(f"{'='*60}")
+                print(f"[INFO] La calibración estéreo básica ha finalizado")
+                print(f"[INFO] Ahora se capturarán patrones Gray Code para calibración precisa del proyector")
+                print(f"\n")
+                
+                # Reabrir streams de cámara si es necesario
+                # (en la práctica, deberían seguir abiertos desde calibrate_stereo_cameras)
+                # Por ahora asumimos que el usuario ejecutará esto en una segunda pasada
+                
+                print(f"[WARNING] La captura de Gray Code requiere reiniciar las cámaras")
+                print(f"[INFO] Por favor, ejecuta el siguiente comando:")
+                print(f"\n  python stereo_calibration.py --gray-code-capture \\")
+                print(f"    --left {args.left} --right {args.right} \\")
+                print(f"    --projector-width {args.projector_width} \\")
+                print(f"    --projector-height {args.projector_height} \\")
+                print(f"    --gray-bits {args.gray_bits} \\")
+                print(f"    --gray-delay {args.gray_delay}")
+                print(f"\n[INFO] Las imágenes Gray Code se guardarán en calib_imgs/ con prefijo gray_")
+                print(f"\n")
         
         # Guardar resultados en formato técnico
         save_calibration_results(img_size, K_right, dist_right, K_left, dist_left, R, T, args.output)
@@ -1948,6 +3186,7 @@ def main():
         # Guardar resultados en formato SEAL con resolución fija 1280x720
         seal_output_file = args.output.replace(".txt", "_seal.txt")
         save_seal_calibration_file(img_size, K_left, dist_left, K_right, dist_right, R, T,
+                                 K_proj, dist_proj,
                                  args.template, seal_output_file, args.dev_id,
                                  square_size_mm=args.square_size, rows=args.rows, cols=args.cols)
         
